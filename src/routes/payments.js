@@ -20,8 +20,8 @@ router.post('/create', async (req, res) => {
       item_description: `Baby essentials order with ${orderItems.length} items`,
       email_address: email,
       m_payment_id: orderId,
-      return_url: 'http://localhost:5173/checkout/success',
-      cancel_url: 'http://localhost:5173/checkout/cancel',
+      return_url: 'https://snuggleup-backend.onrender.com/api/payments/success',
+      cancel_url: 'https://snuggleup-backend.onrender.com/api/payments/cancel',
       notify_url: 'https://snuggleup-backend.onrender.com/api/payments/notify',
     };
 
@@ -37,14 +37,63 @@ router.post('/create', async (req, res) => {
     // Create form data for redirect
     const formData = new URLSearchParams(data).toString();
 
+    // Debug logging
+    console.log('PayFast Data:', data);
+    console.log('Generated Signature:', signature);
+    console.log('Final URL:', `${payfastUrl}?${formData}`);
+
     res.json({ 
       paymentUrl: `${payfastUrl}?${formData}`,
-      orderId: orderId
+      orderId: orderId,
+      debug: {
+        data: data,
+        signature: signature,
+        merchant_id: process.env.PAYFAST_MERCHANT_ID,
+        test_mode: process.env.PAYFAST_TEST_MODE
+      }
     });
   } catch (error) {
     console.error('Payment creation error:', error);
     res.status(500).json({ error: 'Payment creation failed' });
   }
+});
+
+// Temporary success page endpoint
+router.get('/success', (req, res) => {
+  res.send(`
+    <html>
+      <head><title>Payment Success - SnuggleUp</title></head>
+      <body style="font-family: Arial; text-align: center; padding: 50px;">
+        <h1 style="color: green;">✅ Payment Successful!</h1>
+        <h2>SnuggleUp - Thank you for your order!</h2>
+        <p>Your payment has been processed successfully.</p>
+        <p><strong>Order ID:</strong> ${req.query.m_payment_id || 'N/A'}</p>
+        <p><strong>Payment ID:</strong> ${req.query.pf_payment_id || 'N/A'}</p>
+        <p>You'll receive a confirmation email shortly.</p>
+        <hr>
+        <p><em>This is a temporary page for testing. Frontend coming soon!</em></p>
+      </body>
+    </html>
+  `);
+});
+
+// Temporary cancel page endpoint
+router.get('/cancel', (req, res) => {
+  res.send(`
+    <html>
+      <head><title>Payment Cancelled - SnuggleUp</title></head>
+      <body style="font-family: Arial; text-align: center; padding: 50px;">
+        <h1 style="color: red;">❌ Payment Cancelled</h1>
+        <h2>SnuggleUp</h2>
+        <p>Your payment was cancelled or could not be processed.</p>
+        <p><strong>Order ID:</strong> ${req.query.m_payment_id || 'N/A'}</p>
+        <p>No charges were made to your account.</p>
+        <p>Feel free to try again when you're ready!</p>
+        <hr>
+        <p><em>This is a temporary page for testing. Frontend coming soon!</em></p>
+      </body>
+    </html>
+  `);
 });
 
 // Handle PayFast notification
