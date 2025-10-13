@@ -22,7 +22,7 @@ router.post('/create', async (req, res) => {
       m_payment_id: orderId,
       return_url: 'http://localhost:5173/checkout/success',
       cancel_url: 'http://localhost:5173/checkout/cancel',
-      notify_url: 'http://localhost:3000/api/payments/notify',
+      notify_url: 'https://snuggleup-backend.onrender.com/api/payments/notify',
     };
 
     // Generate signature
