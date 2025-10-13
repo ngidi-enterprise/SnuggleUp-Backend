@@ -11,22 +11,25 @@ router.post('/create', async (req, res) => {
     // Generate unique order ID
     const orderId = `ORDER_${Date.now()}`;
     
-    // PayFast payment data
+    // Only required PayFast payment data for redirect
     const data = {
       merchant_id: process.env.PAYFAST_MERCHANT_ID,
       merchant_key: process.env.PAYFAST_MERCHANT_KEY,
       amount: parseFloat(amount).toFixed(2),
       item_name: `SnuggleUp Order ${orderId}`,
-      item_description: `Baby essentials order with ${orderItems.length} items`,
-      email_address: email,
       m_payment_id: orderId,
       return_url: 'https://snuggleup-backend.onrender.com/api/payments/success',
       cancel_url: 'https://snuggleup-backend.onrender.com/api/payments/cancel',
       notify_url: 'https://snuggleup-backend.onrender.com/api/payments/notify',
     };
 
-    // Generate signature
-    const signature = generateSignature(data, process.env.PAYFAST_PASSPHRASE);
+    // Generate signature and log the exact string used
+    const signatureString = Object.entries(data)
+      .sort(([keyA], [keyB]) => keyA.localeCompare(keyB))
+      .map(([key, value]) => `${key}=${encodeURIComponent(value).replace(/%20/g, '+')}`)
+      .join('&');
+    const finalString = process.env.PAYFAST_PASSPHRASE ? `${signatureString}&passphrase=${encodeURIComponent(process.env.PAYFAST_PASSPHRASE)}` : signatureString;
+    const signature = crypto.createHash('md5').update(finalString).digest('hex');
     data.signature = signature;
 
     // In test mode, use sandbox URL
@@ -39,6 +42,7 @@ router.post('/create', async (req, res) => {
 
     // Debug logging
     console.log('PayFast Data:', data);
+    console.log('Signature String:', finalString);
     console.log('Generated Signature:', signature);
     console.log('Final URL:', `${payfastUrl}?${formData}`);
 
@@ -48,6 +52,7 @@ router.post('/create', async (req, res) => {
       debug: {
         data: data,
         signature: signature,
+        signatureString: finalString,
         merchant_id: process.env.PAYFAST_MERCHANT_ID,
         test_mode: process.env.PAYFAST_TEST_MODE
       }
