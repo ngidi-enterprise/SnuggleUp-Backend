@@ -23,8 +23,11 @@ router.post('/create', async (req, res) => {
       notify_url: 'https://snuggleup-backend.onrender.com/api/payments/notify',
     };
 
-    // Generate signature and log the exact string used
-    const signatureString = Object.entries(data)
+    // Generate signature (exclude merchant_key from signature calculation)
+    const signatureData = { ...data };
+    delete signatureData.merchant_key; // Remove merchant_key from signature calculation
+    
+    const signatureString = Object.entries(signatureData)
       .sort(([keyA], [keyB]) => keyA.localeCompare(keyB))
       .map(([key, value]) => `${key}=${encodeURIComponent(value).replace(/%20/g, '+')}`)
       .join('&');
