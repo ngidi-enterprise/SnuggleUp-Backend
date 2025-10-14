@@ -23,8 +23,18 @@ router.post('/create', async (req, res) => {
       notify_url: 'https://snuggleup-backend.onrender.com/api/payments/notify',
     };
 
-    // Generate signature (implement PayFast signature generation)
-    const signature = generateSignature(data);
+    // Generate signature (exclude merchant_key from signature calculation)
+    const signatureData = { ...data };
+    delete signatureData.merchant_key; // Remove merchant_key from signature calculation
+
+    let signatureString = '';
+    let finalString = '';
+    signatureString = Object.entries(signatureData)
+      .sort(([keyA], [keyB]) => keyA.localeCompare(keyB))
+      .map(([key, value]) => `${key}=${encodeURIComponent(value).replace(/%20/g, '+')}`)
+      .join('&');
+    finalString = process.env.PAYFAST_PASSPHRASE ? `${signatureString}&passphrase=${encodeURIComponent(process.env.PAYFAST_PASSPHRASE)}` : signatureString;
+    const signature = crypto.createHash('md5').update(finalString).digest('hex');
     data.signature = signature;
 
     // In test mode, use sandbox URL
