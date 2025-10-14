@@ -11,16 +11,17 @@ router.post('/create', async (req, res) => {
     // Generate unique order ID
     const orderId = `ORDER_${Date.now()}`;
     
-    // Only required PayFast payment data for redirect
+    // Minimal PayFast payment data - testing with only required fields
     const data = {
       merchant_id: process.env.PAYFAST_MERCHANT_ID,
       merchant_key: process.env.PAYFAST_MERCHANT_KEY,
       amount: parseFloat(amount).toFixed(2),
       item_name: `SnuggleUp Order ${orderId}`,
-      m_payment_id: orderId,
-      return_url: 'https://snuggleup-backend.onrender.com/api/payments/success',
-      cancel_url: 'https://snuggleup-backend.onrender.com/api/payments/cancel',
-      notify_url: 'https://snuggleup-backend.onrender.com/api/payments/notify',
+      // Temporarily remove optional fields to test
+      // m_payment_id: orderId,
+      // return_url: 'https://snuggleup-backend.onrender.com/api/payments/success',
+      // cancel_url: 'https://snuggleup-backend.onrender.com/api/payments/cancel',
+      // notify_url: 'https://snuggleup-backend.onrender.com/api/payments/notify',
     };
 
     // Generate signature (PayFast: include ALL posted fields except 'signature')
