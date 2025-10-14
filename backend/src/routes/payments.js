@@ -23,17 +23,18 @@ router.post('/create', async (req, res) => {
       notify_url: 'https://snuggleup-backend.onrender.com/api/payments/notify',
     };
 
-    // Generate signature (exclude merchant_key from signature calculation)
-    const signatureData = { ...data };
-    delete signatureData.merchant_key; // Remove merchant_key from signature calculation
+    // Generate signature (PayFast: include ALL posted fields except 'signature')
+    const signatureData = { ...data }; // keep merchant_key IN signature
 
-    let signatureString = '';
-    let finalString = '';
-    signatureString = Object.entries(signatureData)
-      .sort(([keyA], [keyB]) => keyA.localeCompare(keyB))
+    // Generic sandbox merchant 10000100 does NOT have a passphrase configured.
+    // If using that merchant_id, ignore any provided passphrase env to avoid mismatch.
+    const usePassphrase = process.env.PAYFAST_MERCHANT_ID !== '10000100' && process.env.PAYFAST_PASSPHRASE;
+
+    const signatureString = Object.entries(signatureData)
+      .sort(([a, b]) => a.localeCompare(b))
       .map(([key, value]) => `${key}=${encodeURIComponent(value).replace(/%20/g, '+')}`)
       .join('&');
-    finalString = process.env.PAYFAST_PASSPHRASE ? `${signatureString}&passphrase=${encodeURIComponent(process.env.PAYFAST_PASSPHRASE)}` : signatureString;
+    const finalString = usePassphrase ? `${signatureString}&passphrase=${encodeURIComponent(process.env.PAYFAST_PASSPHRASE)}` : signatureString;
     const signature = crypto.createHash('md5').update(finalString).digest('hex');
     data.signature = signature;
 
