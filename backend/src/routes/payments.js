@@ -30,13 +30,22 @@ router.post('/create', async (req, res) => {
     // If using that merchant_id, ignore any provided passphrase env to avoid mismatch.
     const usePassphrase = process.env.PAYFAST_MERCHANT_ID !== '10000100' && process.env.PAYFAST_PASSPHRASE;
 
-    const signatureString = Object.entries(signatureData)
-      .sort(([a, b]) => a.localeCompare(b))
-      .map(([key, value]) => `${key}=${encodeURIComponent(value).replace(/%20/g, '+')}`)
+    // Per PayFast: signature must EXCLUDE 'merchant_key' and any 'signature' field.
+    const signingKeys = Object.keys(signatureData)
+      .filter(k => k !== 'merchant_key' && k !== 'signature' && k !== 'signature_method')
+      .sort();
+    const signatureString = signingKeys
+      .map(key => `${key}=${encodeURIComponent(signatureData[key]).replace(/%20/g, '+')}`)
       .join('&');
-    const finalString = usePassphrase ? `${signatureString}&passphrase=${encodeURIComponent(process.env.PAYFAST_PASSPHRASE)}` : signatureString;
+    const finalString = (usePassphrase && process.env.PAYFAST_PASSPHRASE)
+      ? `${signatureString}&passphrase=${encodeURIComponent(process.env.PAYFAST_PASSPHRASE)}`
+      : signatureString;
     const signature = crypto.createHash('md5').update(finalString).digest('hex');
     data.signature = signature;
+    // Extra debug
+    console.log('Signing Keys:', signingKeys);
+    console.log('Signature Base String:', signatureString);
+    console.log('Final String Hashed:', finalString);
 
     // In test mode, use sandbox URL
     const payfastUrl = process.env.PAYFAST_TEST_MODE === 'true' 
