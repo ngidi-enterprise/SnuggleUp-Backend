@@ -7,31 +7,22 @@ export const router = express.Router();
 router.post('/create', async (req, res) => {
   try {
     const { amount, email, orderItems } = req.body;
-    
     // Generate unique order ID
     const orderId = `ORDER_${Date.now()}`;
-    
     // Minimal PayFast payment data - testing with only required fields
     const data = {
       merchant_id: process.env.PAYFAST_MERCHANT_ID,
       merchant_key: process.env.PAYFAST_MERCHANT_KEY,
       amount: parseFloat(amount).toFixed(2),
       item_name: `SnuggleUp Order ${orderId}`,
-      // Temporarily remove optional fields to test
-      // m_payment_id: orderId,
+      // m_payment_id: orderId, // Uncomment if you want to add this field
       // return_url: 'https://snuggleup-backend.onrender.com/api/payments/success',
       // cancel_url: 'https://snuggleup-backend.onrender.com/api/payments/cancel',
       // notify_url: 'https://snuggleup-backend.onrender.com/api/payments/notify',
     };
-
     // Generate signature (PayFast: include ALL posted fields except 'signature')
-    const signatureData = { ...data }; // keep merchant_key IN signature
-
-    // Generic sandbox merchant 10000100 does NOT have a passphrase configured.
-    // If using that merchant_id, ignore any provided passphrase env to avoid mismatch.
+    const signatureData = { ...data };
     const usePassphrase = process.env.PAYFAST_MERCHANT_ID !== '10000100' && process.env.PAYFAST_PASSPHRASE;
-
-    // Per PayFast: signature must EXCLUDE 'merchant_key' and any 'signature' field.
     const signingKeys = Object.keys(signatureData)
       .filter(k => k !== 'merchant_key' && k !== 'signature' && k !== 'signature_method')
       .sort();
@@ -47,35 +38,38 @@ router.post('/create', async (req, res) => {
     console.log('Signing Keys:', signingKeys);
     console.log('Signature Base String:', signatureString);
     console.log('Final String Hashed:', finalString);
-
     // In test mode, use sandbox URL
     const payfastUrl = process.env.PAYFAST_TEST_MODE === 'true' 
       ? 'https://sandbox.payfast.co.za/eng/process'
       : 'https://www.payfast.co.za/eng/process';
-
-    // Create form data for redirect
-    const formData = new URLSearchParams(data).toString();
-
     // Debug logging
     console.log('PayFast Data:', data);
     console.log('Signature String:', finalString);
     console.log('Generated Signature:', signature);
-    console.log('Final URL:', `${payfastUrl}?${formData}`);
-
-    res.json({ 
-      paymentUrl: `${payfastUrl}?${formData}`,
-      orderId: orderId,
-      debug: {
-        data: data,
-        signature: signature,
-        signatureString: finalString,
-        merchant_id: process.env.PAYFAST_MERCHANT_ID,
-        test_mode: process.env.PAYFAST_TEST_MODE
-      }
-    });
+    // Build HTML form with hidden fields and auto-submit
+    let formInputs = Object.entries(data).map(
+      ([key, value]) => `<input type="hidden" name="${key}" value="${value}" />`
+    ).join('\n      ');
+    const html = `
+      <html>
+        <head><title>Redirecting to PayFast...</title></head>
+        <body style="font-family: Arial; text-align: center; padding: 50px;">
+          <h2>Redirecting to PayFast for payment...</h2>
+          <form id="payfastForm" action="${payfastUrl}" method="POST">
+            ${formInputs}
+            <noscript>
+              <p>Please click the button below to proceed to PayFast:</p>
+              <button type="submit">Pay Now</button>
+            </noscript>
+          </form>
+          <script>document.getElementById('payfastForm').submit();</script>
+        </body>
+      </html>
+    `;
+    res.send(html);
   } catch (error) {
     console.error('Payment creation error:', error);
-    res.status(500).json({ error: 'Payment creation failed' });
+    res.status(500).send('Payment creation failed');
   }
 });
 
