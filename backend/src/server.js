@@ -15,6 +15,10 @@ const app = express();
 const port = process.env.PORT || 3000;
 
 // Middleware
+app.use((req, res, next) => {
+  console.log(`[${new Date().toISOString()}] ${req.method} ${req.originalUrl} from ${req.headers.origin || req.ip}`);
+  next();
+});
 app.use(cors());
 app.use(express.json());
 
