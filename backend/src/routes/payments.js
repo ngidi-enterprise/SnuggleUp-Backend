@@ -34,6 +34,8 @@ router.post('/create', async (req, res) => {
       : signatureString;
     const signature = crypto.createHash('md5').update(finalString).digest('hex');
     data.signature = signature;
+    // Remove merchant_key from form fields sent to PayFast
+    delete data.merchant_key;
     // Extra debug
     console.log('Signing Keys:', signingKeys);
     console.log('Signature Base String:', signatureString);
