@@ -15,16 +15,16 @@ router.post('/create', async (req, res) => {
       merchant_key: process.env.PAYFAST_MERCHANT_KEY,
       amount: parseFloat(amount).toFixed(2),
       item_name: `SnuggleUp Order ${orderId}`,
-      // m_payment_id: orderId, // Uncomment if you want to add this field
-      // return_url: 'https://snuggleup-backend.onrender.com/api/payments/success',
-      // cancel_url: 'https://snuggleup-backend.onrender.com/api/payments/cancel',
-      // notify_url: 'https://snuggleup-backend.onrender.com/api/payments/notify',
+      m_payment_id: orderId,
+      return_url: 'https://snuggleup-backend.onrender.com/api/payments/success',
+      cancel_url: 'https://snuggleup-backend.onrender.com/api/payments/cancel',
+      notify_url: 'https://snuggleup-backend.onrender.com/api/payments/notify',
     };
     // Generate signature (PayFast: include ALL posted fields except 'signature')
     const signatureData = { ...data };
     const usePassphrase = process.env.PAYFAST_MERCHANT_ID !== '10000100' && process.env.PAYFAST_PASSPHRASE;
     const signingKeys = Object.keys(signatureData)
-      .filter(k => k !== 'merchant_key' && k !== 'signature' && k !== 'signature_method')
+      .filter(k => k !== 'signature' && k !== 'signature_method')
       .sort();
     const signatureString = signingKeys
       .map(key => `${key}=${encodeURIComponent(signatureData[key]).replace(/%20/g, '+')}`)
@@ -33,9 +33,7 @@ router.post('/create', async (req, res) => {
       ? `${signatureString}&passphrase=${encodeURIComponent(process.env.PAYFAST_PASSPHRASE)}`
       : signatureString;
     const signature = crypto.createHash('md5').update(finalString).digest('hex');
-    data.signature = signature;
-    // Remove merchant_key from form fields sent to PayFast
-    delete data.merchant_key;
+  data.signature = signature;
     // Extra debug
     console.log('Signing Keys:', signingKeys);
     console.log('Signature Base String:', signatureString);
