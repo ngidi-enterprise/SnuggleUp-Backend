@@ -11,8 +11,8 @@ router.post('/create', async (req, res) => {
     const orderId = `ORDER_${Date.now()}`;
     // Minimal PayFast payment data - testing with only required fields
     const data = {
-      merchant_id: process.env.PAYFAST_MERCHANT_ID,
-      merchant_key: process.env.PAYFAST_MERCHANT_KEY,
+      merchant_id: '10042854',
+      merchant_key: 'bmvnyjivavg1a',
       amount: parseFloat(amount).toFixed(2),
       item_name: `SnuggleUp Order ${orderId}`,
       m_payment_id: orderId,
