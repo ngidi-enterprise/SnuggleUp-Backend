@@ -1,14 +1,50 @@
 import express from 'express';
 import crypto from 'crypto';
+import { createOrder, updateOrderStatus } from './orders.js';
+import jwt from 'jsonwebtoken';
 
 export const router = express.Router();
+
+const JWT_SECRET = process.env.JWT_SECRET || 'snuggleup-secret-key-change-in-production';
 
 // Create a payment
 router.post('/create', async (req, res) => {
   try {
-    const { amount, email, orderItems } = req.body;
+    const { amount, email, orderItems, subtotal, shipping, discount, token } = req.body;
+    
+    // Verify user authentication
+    let userId = null;
+    if (token) {
+      try {
+        const decoded = jwt.verify(token, JWT_SECRET);
+        userId = decoded.userId;
+      } catch (err) {
+        return res.status(401).json({ error: 'Invalid authentication token' });
+      }
+    } else {
+      return res.status(401).json({ error: 'Authentication required' });
+    }
+    
     // Generate unique order ID
     const orderId = `ORDER_${Date.now()}`;
+    
+    // Create order in database
+    try {
+      createOrder(userId, {
+        orderNumber: orderId,
+        items: orderItems,
+        subtotal: subtotal || 0,
+        shipping: shipping || 0,
+        discount: discount || 0,
+        total: amount,
+        email
+      });
+      console.log(`✅ Order ${orderId} created for user ${userId}`);
+    } catch (dbError) {
+      console.error('Database error creating order:', dbError);
+      return res.status(500).json({ error: 'Failed to create order' });
+    }
+    
     // Minimal PayFast payment data - testing with only required fields
     const data = {
       merchant_id: '10042854',
@@ -143,14 +179,27 @@ router.post('/notify', async (req, res) => {
     if (payment_status === 'COMPLETE') {
       console.log(`Payment completed for order ${m_payment_id}, PayFast ID: ${pf_payment_id}, Amount: R${amount_gross}`);
       
-      // TODO: Update order status in database
+      // Update order status in database
+      try {
+        updateOrderStatus(m_payment_id, 'completed', pf_payment_id);
+        console.log(`✅ Order ${m_payment_id} marked as completed`);
+      } catch (dbError) {
+        console.error('Failed to update order status:', dbError);
+      }
+      
       // TODO: Send confirmation email
       // TODO: Update inventory
       
-      // For now, just log success
       console.log('Payment successfully processed');
     } else {
       console.log(`Payment failed or cancelled for order ${m_payment_id}, Status: ${payment_status}`);
+      
+      // Update order status to failed
+      try {
+        updateOrderStatus(m_payment_id, 'failed', pf_payment_id);
+      } catch (dbError) {
+        console.error('Failed to update order status:', dbError);
+      }
     }
     
     // Always respond with OK to acknowledge receipt
