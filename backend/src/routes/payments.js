@@ -77,7 +77,14 @@ router.post('/create', async (req, res) => {
 router.get('/success', (req, res) => {
   res.send(`
     <html>
-      <head><title>Payment Success - SnuggleUp</title></head>
+      <head>
+        <title>Payment Success - SnuggleUp</title>
+        <meta http-equiv="refresh" content="30;url=https://snuggleup-frontend-url/" />
+        <style>
+          .success-btn { background: #ff6600; color: #fff; border: none; border-radius: 6px; padding: 12px 32px; font-size: 1.2em; margin-top: 24px; cursor: pointer; }
+          .success-btn:hover { background: #e65c00; }
+        </style>
+      </head>
       <body style="font-family: Arial; text-align: center; padding: 50px;">
         <h1 style="color: green;">✅ Payment Successful!</h1>
         <h2>SnuggleUp - Thank you for your order!</h2>
@@ -87,6 +94,8 @@ router.get('/success', (req, res) => {
         <p>You'll receive a confirmation email shortly.</p>
         <hr>
         <p><em>This is a temporary page for testing. Frontend coming soon!</em></p>
+        <button class="success-btn" onclick="window.location.href='https://snuggleup-frontend-url/'">Back to Shop</button>
+        <p style="margin-top:16px;color:#888;">You will be redirected to the shop in 30 seconds.</p>
       </body>
     </html>
   `);
