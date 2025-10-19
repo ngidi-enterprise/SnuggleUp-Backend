@@ -5,22 +5,18 @@ import { authenticateToken } from '../middleware/auth.js';
 export const router = express.Router();
 
 // Get all orders for logged-in user
-router.get('/history', authenticateToken, (req, res) => {
+router.get('/history', authenticateToken, async (req, res) => {
   try {
     const userId = req.user.userId;
 
-    const orders = db.prepare(`
-      SELECT 
-        id, order_number, total, status, 
-        created_at, updated_at, items, 
-        subtotal, shipping, discount
-      FROM orders 
-      WHERE user_id = ? 
-      ORDER BY created_at DESC
-    `).all(userId);
+    const { rows } = await db.query(
+      `SELECT id, order_number, total, status, created_at, updated_at, items, subtotal, shipping, discount
+       FROM orders WHERE user_id = $1 ORDER BY created_at DESC`,
+      [userId]
+    );
 
     // Parse items JSON for each order
-    const ordersWithItems = orders.map(order => ({
+    const ordersWithItems = rows.map(order => ({
       ...order,
       items: JSON.parse(order.items)
     }));
@@ -33,15 +29,16 @@ router.get('/history', authenticateToken, (req, res) => {
 });
 
 // Get single order details
-router.get('/:orderId', authenticateToken, (req, res) => {
+router.get('/:orderId', authenticateToken, async (req, res) => {
   try {
     const userId = req.user.userId;
     const orderId = req.params.orderId;
 
-    const order = db.prepare(`
-      SELECT * FROM orders 
-      WHERE id = ? AND user_id = ?
-    `).get(orderId, userId);
+    const result = await db.query(
+      `SELECT * FROM orders WHERE id = $1 AND user_id = $2`,
+      [orderId, userId]
+    );
+    const order = result.rows[0];
 
     if (!order) {
       return res.status(404).json({ error: 'Order not found' });
@@ -58,27 +55,24 @@ router.get('/:orderId', authenticateToken, (req, res) => {
 });
 
 // Create new order (called from payment flow)
-export const createOrder = (userId, orderData) => {
+export const createOrder = async (userId, orderData) => {
   try {
     const { orderNumber, items, subtotal, shipping, discount, total, email } = orderData;
-
-    const result = db.prepare(`
-      INSERT INTO orders (
-        user_id, order_number, items, subtotal, 
-        shipping, discount, total, customer_email, status
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending')
-    `).run(
-      userId,
-      orderNumber,
-      JSON.stringify(items),
-      subtotal,
-      shipping,
-      discount || 0,
-      total,
-      email
+    const result = await db.query(
+      `INSERT INTO orders (user_id, order_number, items, subtotal, shipping, discount, total, customer_email, status)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'pending') RETURNING id`,
+      [
+        userId,
+        orderNumber,
+        JSON.stringify(items),
+        subtotal,
+        shipping,
+        discount || 0,
+        total,
+        email
+      ]
     );
-
-    return result.lastInsertRowid;
+    return result.rows[0].id;
   } catch (error) {
     console.error('Create order error:', error);
     throw error;
@@ -86,14 +80,12 @@ export const createOrder = (userId, orderData) => {
 };
 
 // Update order status (called from PayFast webhook)
-export const updateOrderStatus = (orderNumber, status, payfastPaymentId) => {
+export const updateOrderStatus = async (orderNumber, status, payfastPaymentId) => {
   try {
-    db.prepare(`
-      UPDATE orders 
-      SET status = ?, payfast_payment_id = ?, updated_at = CURRENT_TIMESTAMP
-      WHERE order_number = ?
-    `).run(status, payfastPaymentId, orderNumber);
-
+    await db.query(
+      `UPDATE orders SET status = $1, payfast_payment_id = $2, updated_at = CURRENT_TIMESTAMP WHERE order_number = $3`,
+      [status, payfastPaymentId, orderNumber]
+    );
     return true;
   } catch (error) {
     console.error('Update order status error:', error);
