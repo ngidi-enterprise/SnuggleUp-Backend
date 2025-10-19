@@ -20,8 +20,8 @@ router.post('/register', async (req, res) => {
     }
 
     // Check if user already exists
-    const existingUser = db.prepare('SELECT id FROM users WHERE email = ?').get(email);
-    if (existingUser) {
+    const existing = await db.query('SELECT id FROM users WHERE email = $1', [email]);
+    if (existing.rows && existing.rows.length > 0) {
       return res.status(400).json({ error: 'Email already registered' });
     }
 
@@ -29,18 +29,20 @@ router.post('/register', async (req, res) => {
     const hashedPassword = await bcrypt.hash(password, 10);
 
     // Insert user
-    const result = db.prepare(
-      'INSERT INTO users (email, password, name, phone) VALUES (?, ?, ?, ?)'
-    ).run(email, hashedPassword, name, phone || null);
+    const insert = await db.query(
+      'INSERT INTO users (email, password, name, phone) VALUES ($1, $2, $3, $4) RETURNING id',
+      [email, hashedPassword, name, phone || null]
+    );
 
+    const userId = insert.rows[0].id;
     // Generate token
-    const token = generateToken(result.lastInsertRowid, email);
+    const token = generateToken(userId, email);
 
     res.status(201).json({
       message: 'User registered successfully',
       token,
       user: {
-        id: result.lastInsertRowid,
+        id: userId,
         email,
         name,
         phone
@@ -63,10 +65,11 @@ router.post('/login', async (req, res) => {
     }
 
     // Find user
-    const user = db.prepare('SELECT * FROM users WHERE email = ?').get(email);
-    if (!user) {
+    const found = await db.query('SELECT * FROM users WHERE email = $1', [email]);
+    if (!found.rows || found.rows.length === 0) {
       return res.status(401).json({ error: 'Invalid email or password' });
     }
+    const user = found.rows[0];
 
     // Verify password
     const isValidPassword = await bcrypt.compare(password, user.password);
@@ -74,8 +77,8 @@ router.post('/login', async (req, res) => {
       return res.status(401).json({ error: 'Invalid email or password' });
     }
 
-    // Generate token
-    const token = generateToken(user.id, user.email);
+  // Generate token
+  const token = generateToken(user.id, user.email);
 
     res.json({
       message: 'Login successful',
