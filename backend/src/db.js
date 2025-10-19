@@ -2,14 +2,27 @@
 import pkg from 'pg';
 const { Pool } = pkg;
 
-// PostgreSQL connection config (use environment variables in production)
-const pool = new Pool({
-  user: process.env.PGUSER || 'postgres',
-  host: process.env.PGHOST || 'localhost',
-  database: process.env.PGDATABASE || 'snuggleup',
-  password: process.env.PGPASSWORD || 'postgres',
-  port: process.env.PGPORT ? parseInt(process.env.PGPORT) : 5432,
-});
+// PostgreSQL connection config (supports Render DATABASE_URL and SSL)
+let pool;
+if (process.env.DATABASE_URL) {
+  pool = new Pool({
+    connectionString: process.env.DATABASE_URL,
+    ssl: process.env.PGSSLMODE === 'disable' ? false : { rejectUnauthorized: false },
+  });
+} else {
+  const baseConfig = {
+    user: process.env.PGUSER || 'postgres',
+    host: process.env.PGHOST || 'localhost',
+    database: process.env.PGDATABASE || 'snuggleup',
+    password: process.env.PGPASSWORD || 'postgres',
+    port: process.env.PGPORT ? parseInt(process.env.PGPORT) : 5432,
+  };
+  // Enable SSL if explicitly requested
+  if (process.env.PGSSLMODE === 'require') {
+    baseConfig.ssl = { rejectUnauthorized: false };
+  }
+  pool = new Pool(baseConfig);
+}
 
 // Create tables if they don't exist
 async function initDb() {
