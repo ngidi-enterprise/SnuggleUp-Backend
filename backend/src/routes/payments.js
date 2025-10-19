@@ -30,7 +30,7 @@ router.post('/create', async (req, res) => {
     
     // Create order in database
     try {
-      createOrder(userId, {
+      await createOrder(userId, {
         orderNumber: orderId,
         items: orderItems,
         subtotal: subtotal || 0,
@@ -181,7 +181,7 @@ router.post('/notify', async (req, res) => {
       
       // Update order status in database
       try {
-        updateOrderStatus(m_payment_id, 'completed', pf_payment_id);
+        await updateOrderStatus(m_payment_id, 'completed', pf_payment_id);
         console.log(`✅ Order ${m_payment_id} marked as completed`);
       } catch (dbError) {
         console.error('Failed to update order status:', dbError);
@@ -196,7 +196,7 @@ router.post('/notify', async (req, res) => {
       
       // Update order status to failed
       try {
-        updateOrderStatus(m_payment_id, 'failed', pf_payment_id);
+        await updateOrderStatus(m_payment_id, 'failed', pf_payment_id);
       } catch (dbError) {
         console.error('Failed to update order status:', dbError);
       }
