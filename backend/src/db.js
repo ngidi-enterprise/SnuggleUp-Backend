@@ -33,6 +33,8 @@ async function initDb() {
       password TEXT NOT NULL,
       name TEXT NOT NULL,
       phone TEXT,
+        reset_token TEXT,
+        reset_token_expires TIMESTAMP,
       created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     );
   `);
