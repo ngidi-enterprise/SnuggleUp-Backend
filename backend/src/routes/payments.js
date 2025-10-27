@@ -40,7 +40,8 @@ router.post('/create', optionalAuth, async (req, res) => {
     };
 
     // Generate signature according to PayFast specs
-    const signature = generateSignature(data);
+    const passphrase = process.env.PAYFAST_PASSPHRASE || ''; // Optional but recommended
+    const signature = generateSignature(data, passphrase);
     data.signature = signature;
 
     // In test mode, use sandbox URL
@@ -76,19 +77,23 @@ router.post('/notify', async (req, res) => {
 });
 
 // Helper function to generate PayFast signature according to their specs
-function generateSignature(data) {
-  // PayFast requires: key=value&key=value format (URL encoded)
+function generateSignature(data, passphrase = '') {
+  // PayFast requires: key=value&key=value format
   // Sorted alphabetically, excluding signature field
+  // NOTE: PayFast wants the values NOT URL encoded for signature calculation
   const params = Object.entries(data)
     .filter(([key]) => key !== 'signature') // Don't include signature in signature calculation
     .sort(([keyA], [keyB]) => keyA.localeCompare(keyB))
-    .map(([key, value]) => `${encodeURIComponent(key)}=${encodeURIComponent(value)}`)
+    .map(([key, value]) => `${key}=${value}`)
     .join('&');
 
-  console.log('🔐 Signature string:', params.substring(0, 100) + '...');
+  // Add passphrase at the end if provided
+  const signatureString = passphrase ? `${params}&passphrase=${passphrase}` : params;
+
+  console.log('🔐 Signature string:', signatureString.substring(0, 100) + '...');
 
   return crypto
     .createHash('md5')
-    .update(params)
+    .update(signatureString)
     .digest('hex');
 }
