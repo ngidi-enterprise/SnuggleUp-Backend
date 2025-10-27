@@ -57,11 +57,27 @@ router.post('/create', optionalAuth, async (req, res) => {
     // Note: test flag already included above (prior to signature)
 
     console.log('✅ PayFast URL generated:', payfastUrl);
-    console.log('📝 Payment data:', { ...data, signature: signature.substring(0, 10) + '...' });
+    console.log('📝 Payment data (posting):', { ...data, signature: signature.substring(0, 10) + '...' });
 
-    res.json({ 
-      paymentUrl: `${payfastUrl}?${new URLSearchParams(data).toString()}`
-    });
+    // Prefer POSTing to PayFast (more reliable than GET for some accounts)
+    const inputs = Object.entries(data)
+      .map(([key, value]) => `<input type="hidden" name="${key}" value="${String(value).replace(/"/g, '&quot;')}">`)
+      .join('\n');
+
+    const html = `<!doctype html>
+<html>
+  <head><meta charset="utf-8"><title>Redirecting to PayFast…</title></head>
+  <body>
+    <p>Redirecting to PayFast, please wait…</p>
+    <form id="payfastForm" action="${payfastUrl}" method="post">
+      ${inputs}
+    </form>
+    <script>document.getElementById('payfastForm').submit();</script>
+  </body>
+</html>`;
+
+    res.setHeader('Content-Type', 'text/html; charset=utf-8');
+    res.status(200).send(html);
   } catch (error) {
     console.error('❌ Payment creation error:', error);
     res.status(500).json({ error: 'Payment creation failed', details: error.message });
