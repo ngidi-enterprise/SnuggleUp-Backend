@@ -28,8 +28,8 @@ router.post('/create', optionalAuth, async (req, res) => {
     const data = {
       merchant_id: process.env.PAYFAST_MERCHANT_ID || '10042854',
       merchant_key: process.env.PAYFAST_MERCHANT_KEY || 'bmvnyjivavg1a',
-      return_url: `${frontendUrl}/checkout-success`,
-      cancel_url: `${frontendUrl}/checkout-cancel`,
+      return_url: `${frontendUrl}/checkout/success`,
+      cancel_url: `${frontendUrl}/checkout/cancel`,
       notify_url: `${backendUrl}/api/payments/notify`,
       name_first: req.user?.email?.split('@')[0] || 'Customer',
       email_address: email,
@@ -48,6 +48,11 @@ router.post('/create', optionalAuth, async (req, res) => {
     const payfastUrl = process.env.PAYFAST_TEST_MODE === 'true' 
       ? 'https://sandbox.payfast.co.za/eng/process'
       : 'https://www.payfast.co.za/eng/process';
+
+    // Add test flag for sandbox consistency
+    if (process.env.PAYFAST_TEST_MODE === 'true') {
+      data.test = '1';
+    }
 
     console.log('✅ PayFast URL generated:', payfastUrl);
     console.log('📝 Payment data:', { ...data, signature: signature.substring(0, 10) + '...' });
