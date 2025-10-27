@@ -33,8 +33,10 @@ export const authenticateToken = async (req, res, next) => {
       audience: undefined
     });
     req.user = { userId: payload.sub, email: payload.email, supabaseUser: true };
+    console.log('✅ Token verified via JWKS (RS256)');
     return next();
-  } catch (_) {
+  } catch (err) {
+    console.log('❌ JWKS verification failed:', err.message);
     // continue to HS256 paths
   }
 
@@ -43,18 +45,25 @@ export const authenticateToken = async (req, res, next) => {
     try {
       const decoded = jwt.verify(token, SUPABASE_JWT_SECRET, { algorithms: ['HS256'] });
       req.user = { userId: decoded.sub, email: decoded.email, supabaseUser: true };
+      console.log('✅ Token verified via HS256 (Supabase JWT Secret)');
       return next();
-    } catch (_) {
+    } catch (err) {
+      console.log('❌ HS256 verification failed:', err.message);
       // continue to app-JWT path
     }
+  } else {
+    console.log('⚠️ SUPABASE_JWT_SECRET not set, skipping HS256 verification');
   }
 
   // 3) Fallback to app's own JWT (if any)
   try {
     const user = jwt.verify(token, JWT_SECRET);
     req.user = user; // { userId, email }
+    console.log('✅ Token verified via app JWT');
     return next();
   } catch (err) {
+    console.log('❌ App JWT verification failed:', err.message);
+    console.log('🚫 All token verification methods failed');
     return res.status(403).json({ error: 'Invalid or expired token' });
   }
 };
