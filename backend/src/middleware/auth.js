@@ -2,7 +2,7 @@ import jwt from 'jsonwebtoken';
 import { createRemoteJWKSet, jwtVerify } from 'jose';
 
 const JWT_SECRET = process.env.JWT_SECRET || 'snuggleup-secret-key-change-in-production';
-const SUPABASE_JWT_SECRET = process.env.SUPABASE_JWT_SECRET || '';
+const SUPABASE_JWT_SECRET = process.env.SUPABASE_JWT_SECRET || '6Mi5NgpwsKlmvdIHeqWr7wOm5CaeUM8A2B+47hJvL5U7y5RtsHq3f8zSrV9DtkIQCfby7HcA3zmYkaOwZNiaoQ==';
 const SUPABASE_URL = process.env.SUPABASE_URL || 'https://ljywlweffxmktrjbaurc.supabase.co';
 
 // Lazy JWKS client (RS256 verification for modern Supabase projects)
@@ -75,3 +75,4 @@ export const generateToken = (userId, email) => {
     { expiresIn: '7d' } // Token expires in 7 days
   );
 };
+
