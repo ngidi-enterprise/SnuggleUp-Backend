@@ -39,6 +39,11 @@ router.post('/create', optionalAuth, async (req, res) => {
       item_description: orderItems?.map(i => i.name).join(', ').substring(0, 100) || 'SnuggleUp order',
     };
 
+    // Add test flag BEFORE signature so it's included in the hash (PayFast requirement)
+    if (process.env.PAYFAST_TEST_MODE === 'true') {
+      data.test = '1';
+    }
+
     // Generate signature according to PayFast specs
     const passphrase = process.env.PAYFAST_PASSPHRASE || ''; // Optional but recommended
     const signature = generateSignature(data, passphrase);
@@ -49,10 +54,7 @@ router.post('/create', optionalAuth, async (req, res) => {
       ? 'https://sandbox.payfast.co.za/eng/process'
       : 'https://www.payfast.co.za/eng/process';
 
-    // Add test flag for sandbox consistency
-    if (process.env.PAYFAST_TEST_MODE === 'true') {
-      data.test = '1';
-    }
+    // Note: test flag already included above (prior to signature)
 
     console.log('✅ PayFast URL generated:', payfastUrl);
     console.log('📝 Payment data:', { ...data, signature: signature.substring(0, 10) + '...' });
@@ -83,17 +85,16 @@ router.post('/notify', async (req, res) => {
 
 // Helper function to generate PayFast signature according to their specs
 function generateSignature(data, passphrase = '') {
-  // PayFast requires: key=value&key=value format
-  // Sorted alphabetically, excluding signature field
-  // NOTE: PayFast wants the values NOT URL encoded for signature calculation
+  // PayFast requires: key=value&key=value format (URL encoded)
+  // Sorted alphabetically, excluding signature field and excluding empty values
   const params = Object.entries(data)
-    .filter(([key]) => key !== 'signature') // Don't include signature in signature calculation
+    .filter(([key, value]) => key !== 'signature' && value !== undefined && value !== null && `${value}`.length > 0)
     .sort(([keyA], [keyB]) => keyA.localeCompare(keyB))
-    .map(([key, value]) => `${key}=${value}`)
+    .map(([key, value]) => `${encodeURIComponent(key)}=${encodeURIComponent(value)}`)
     .join('&');
 
   // Add passphrase at the end if provided
-  const signatureString = passphrase ? `${params}&passphrase=${passphrase}` : params;
+  const signatureString = passphrase ? `${params}&passphrase=${encodeURIComponent(passphrase)}` : params;
 
   console.log('🔐 Signature string:', signatureString.substring(0, 100) + '...');
 
