@@ -26,8 +26,8 @@ router.post('/create', optionalAuth, async (req, res) => {
     
     // PayFast payment data - order matters for signature!
     const data = {
-      merchant_id: process.env.PAYFAST_MERCHANT_ID || '10000100',
-      merchant_key: process.env.PAYFAST_MERCHANT_KEY || '46f0cd694581a',
+      merchant_id: process.env.PAYFAST_MERCHANT_ID || '10042854',
+      merchant_key: process.env.PAYFAST_MERCHANT_KEY || 'bmvnyjivavg1a',
       return_url: `${frontendUrl}/checkout-success`,
       cancel_url: `${frontendUrl}/checkout-cancel`,
       notify_url: `${backendUrl}/api/payments/notify`,
