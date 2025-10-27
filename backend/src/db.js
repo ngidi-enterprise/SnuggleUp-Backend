@@ -39,10 +39,14 @@ async function initDb() {
     );
   `);
 
+  // Ensure reset columns exist even if the table was created before these fields were added
+  await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS reset_token TEXT;`);
+  await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS reset_token_expires TIMESTAMP;`);
+
   await pool.query(`
     CREATE TABLE IF NOT EXISTS orders (
       id SERIAL PRIMARY KEY,
-      user_id INTEGER NOT NULL,
+      user_id TEXT NOT NULL,
       order_number TEXT UNIQUE NOT NULL,
       items TEXT NOT NULL,
       subtotal REAL NOT NULL,
@@ -54,13 +58,22 @@ async function initDb() {
       payfast_signature TEXT,
       customer_email TEXT,
       created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-      updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-      FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+      updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     );
   `);
 
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_orders_user_id ON orders(user_id);`);
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_orders_status ON orders(status);`);
+  
+  // Migration: Change user_id from INTEGER to TEXT for Supabase UUID compatibility
+  try {
+    await pool.query(`ALTER TABLE orders ALTER COLUMN user_id TYPE TEXT;`);
+    console.log('✅ Migrated orders.user_id to TEXT for Supabase UUIDs');
+  } catch (err) {
+    // Column might already be TEXT or migration already ran
+    console.log('ℹ️ orders.user_id migration skipped:', err.message);
+  }
+  
   console.log('✅ PostgreSQL database initialized successfully');
 }
 
