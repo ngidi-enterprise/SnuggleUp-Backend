@@ -44,9 +44,9 @@ router.post('/create', optionalAuth, async (req, res) => {
       data.test = '1';
     }
 
-    // Generate signature according to PayFast specs
-    const passphrase = process.env.PAYFAST_PASSPHRASE || ''; // Optional but recommended
-    const signature = generateSignature(data, passphrase);
+  // Generate signature according to PayFast specs
+  const passphrase = process.env.PAYFAST_PASSPHRASE || ''; // Optional but recommended
+  const signature = generateSignature(data, passphrase);
     data.signature = signature;
 
     // In test mode, use sandbox URL
@@ -58,6 +58,10 @@ router.post('/create', optionalAuth, async (req, res) => {
 
     console.log('✅ PayFast URL generated:', payfastUrl);
     console.log('📝 Payment data (posting):', { ...data, signature: signature.substring(0, 10) + '...' });
+    console.log('ℹ️ PayFast debug:', {
+      includeTest: data.test === '1',
+      passphraseIncluded: Boolean(passphrase),
+    });
 
     // Prefer POSTing to PayFast (more reliable than GET for some accounts)
     const inputs = Object.entries(data)
