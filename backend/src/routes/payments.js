@@ -63,23 +63,20 @@ router.post('/create', optionalAuth, async (req, res) => {
       passphraseIncluded: Boolean(passphrase),
     });
 
-    // Prefer POSTing to PayFast (more reliable than GET for some accounts)
-    const inputs = Object.entries(data)
-      .map(([key, value]) => `<input type="hidden" name="${key}" value="${String(value).replace(/"/g, '&quot;')}">`)
-      .join('\n');
+    // Build query string exactly as used for signing to avoid any encoding drift
+    const formEncode = (v) => encodeURIComponent(String(v)).replace(/%20/g, '+');
+    const paramString = Object.entries(data)
+      .filter(([key, value]) => key !== 'signature' && value !== undefined && value !== null && `${value}`.length > 0)
+      .sort(([a], [b]) => a.localeCompare(b))
+      .map(([key, value]) => `${key}=${formEncode(value)}`)
+      .join('&');
+    const fullUrl = `${payfastUrl}?${paramString}&signature=${signature}`;
 
-    const html = `<!doctype html>
-<html>
-  <head><meta charset="utf-8"><title>Redirecting to PayFast…</title></head>
-  <body>
-    <p>Redirecting to PayFast, please wait…</p>
-    <form id="payfastForm" action="${payfastUrl}" method="post">
-      ${inputs}
-    </form>
-    <script>document.getElementById('payfastForm').submit();</script>
-  </body>
-</html>`;
-
+    // If client expects JSON (our frontend does), return the URL; otherwise serve a tiny redirect page
+    if ((req.headers['accept'] || '').includes('application/json')) {
+      return res.json({ paymentUrl: fullUrl });
+    }
+    const html = `<!doctype html><html><head><meta charset=\"utf-8\"><meta http-equiv=\"refresh\" content=\"0;url='${fullUrl}'\"><title>Redirecting…</title></head><body>If you are not redirected, <a href=\"${fullUrl}\">click here</a>.</body></html>`;
     res.setHeader('Content-Type', 'text/html; charset=utf-8');
     res.status(200).send(html);
   } catch (error) {
