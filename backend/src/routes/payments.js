@@ -46,7 +46,7 @@ router.post('/create', optionalAuth, async (req, res) => {
     }
 
   // Generate signature according to PayFast specs
-  const passphrase = process.env.PAYFAST_PASSPHRASE || ''; // Optional but recommended
+  const passphrase = 'saltsaltsalt'; // Updated passphrase as requested
   const signature = generateSignature(data, passphrase);
     data.signature = signature;
 
