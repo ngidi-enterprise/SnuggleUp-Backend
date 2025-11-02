@@ -27,8 +27,8 @@ router.post('/create', optionalAuth, async (req, res) => {
     // PayFast payment data - order matters for signature!
     // Use shorter URLs to avoid PayFast URL length/validation issues
     const data = {
-      merchant_id: process.env.PAYFAST_MERCHANT_ID || '10042854',
-      merchant_key: process.env.PAYFAST_MERCHANT_KEY || 'bmvnyjivavg1a',
+      merchant_id: process.env.PAYFAST_MERCHANT_ID || '10000100',
+      merchant_key: process.env.PAYFAST_MERCHANT_KEY || '46f0cd694581a',
       return_url: `${backendUrl}/api/payments/success`,
       cancel_url: `${backendUrl}/api/payments/cancel`,
       notify_url: `${backendUrl}/api/payments/notify`,
