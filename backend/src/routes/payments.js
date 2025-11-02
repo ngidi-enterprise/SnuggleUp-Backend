@@ -105,18 +105,21 @@ router.post('/notify', async (req, res) => {
 
 // Helper function to generate PayFast signature according to their specs
 function generateSignature(data, passphrase = '') {
-  // PayFast requires: key=value&key=value format (URL encoded)
-  // Sorted alphabetically, excluding signature field and excluding empty values
+  // Use application/x-www-form-urlencoded style encoding to match HTML form POST
+  const formEncode = (v) => encodeURIComponent(String(v))
+    .replace(/%20/g, '+'); // spaces encoded as + in form posts
+
+  // Sorted alphabetically, exclude signature and empty/undefined values
   const params = Object.entries(data)
     .filter(([key, value]) => key !== 'signature' && value !== undefined && value !== null && `${value}`.length > 0)
-    .sort(([keyA], [keyB]) => keyA.localeCompare(keyB))
-    .map(([key, value]) => `${encodeURIComponent(key)}=${encodeURIComponent(value)}`)
+    .sort(([a], [b]) => a.localeCompare(b))
+    .map(([key, value]) => `${key}=${formEncode(value)}`)
     .join('&');
 
-  // Add passphrase at the end if provided
-  const signatureString = passphrase ? `${params}&passphrase=${encodeURIComponent(passphrase)}` : params;
+  // Append passphrase if present (must be included in signature string)
+  const signatureString = passphrase ? `${params}&passphrase=${formEncode(passphrase)}` : params;
 
-  console.log('🔐 Signature string:', signatureString.substring(0, 100) + '...');
+  console.log('🔐 Signature string:', signatureString.substring(0, 120) + '...');
 
   return crypto
     .createHash('md5')
