@@ -25,11 +25,12 @@ router.post('/create', optionalAuth, async (req, res) => {
     const backendUrl = process.env.BACKEND_URL || 'https://snuggleup-backend.onrender.com';
     
     // PayFast payment data - order matters for signature!
+    // Use shorter URLs to avoid PayFast URL length/validation issues
     const data = {
       merchant_id: process.env.PAYFAST_MERCHANT_ID || '10042854',
       merchant_key: process.env.PAYFAST_MERCHANT_KEY || 'bmvnyjivavg1a',
-      return_url: `${frontendUrl}/checkout/success`,
-      cancel_url: `${frontendUrl}/checkout/cancel`,
+      return_url: `${backendUrl}/api/payments/success`,
+      cancel_url: `${backendUrl}/api/payments/cancel`,
       notify_url: `${backendUrl}/api/payments/notify`,
       name_first: req.user?.email?.split('@')[0] || 'Customer',
       email_address: email,
@@ -95,6 +96,18 @@ router.post('/create', optionalAuth, async (req, res) => {
   }
 });
 
+// Handle PayFast success redirect
+router.get('/success', (req, res) => {
+  const frontendUrl = process.env.FRONTEND_URL || 'https://vitejsviteeadmfezy-esxh--5173--cf284e50.local-credentialless.webcontainer.io';
+  res.redirect(`${frontendUrl}/checkout/success`);
+});
+
+// Handle PayFast cancel redirect
+router.get('/cancel', (req, res) => {
+  const frontendUrl = process.env.FRONTEND_URL || 'https://vitejsviteeadmfezy-esxh--5173--cf284e50.local-credentialless.webcontainer.io';
+  res.redirect(`${frontendUrl}/checkout/cancel`);
+});
+
 // Handle PayFast notification
 router.post('/notify', async (req, res) => {
   try {
@@ -114,20 +127,32 @@ router.post('/notify', async (req, res) => {
 function generateSignature(data, passphrase = '') {
   // PayFast signature: key=value&key=value with RAW unencoded values
   // Sorted alphabetically, exclude signature and empty/undefined values
-  const params = Object.entries(data)
+  const entries = Object.entries(data)
     .filter(([key, value]) => key !== 'signature' && value !== undefined && value !== null && `${value}`.length > 0)
-    .sort(([a], [b]) => a.localeCompare(b))
+    .sort(([a], [b]) => a.localeCompare(b));
+
+  console.log('🔍 Fields being signed (alphabetical order):');
+  entries.forEach(([key, value]) => {
+    console.log(`  ${key}=${String(value).substring(0, 80)}${String(value).length > 80 ? '...' : ''}`);
+  });
+
+  const params = entries
     .map(([key, value]) => `${key}=${value}`)
     .join('&');
 
   // Append passphrase if present (must be included in signature string)
   const signatureString = passphrase ? `${params}&passphrase=${passphrase}` : params;
 
-  console.log('🔐 Signature string (RAW):', signatureString.substring(0, 150) + '...');
-  console.log('🔐 Full signature string length:', signatureString.length);
+  console.log('🔐 FULL Signature string:');
+  console.log(signatureString);
+  console.log('🔐 String length:', signatureString.length);
 
-  return crypto
+  const hash = crypto
     .createHash('md5')
     .update(signatureString)
     .digest('hex');
+
+  console.log('🔐 MD5 hash:', hash);
+
+  return hash;
 }
