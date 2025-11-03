@@ -4,6 +4,7 @@ import dotenv from 'dotenv';
 import { fileURLToPath } from 'url';
 import { dirname } from 'path';
 import { router as paymentsRouter } from './routes/payments.js';
+import { router as cjRouter } from './routes/cj.js';
 
 // Load environment variables
 dotenv.config();
@@ -20,6 +21,7 @@ app.use(express.json());
 
 // Routes
 app.use('/api/payments', paymentsRouter);
+app.use('/api/cj', cjRouter);
 
 // Health check
 app.get('/health', (req, res) => {
