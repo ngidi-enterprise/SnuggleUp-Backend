@@ -126,6 +126,13 @@ export const cjClient = {
 
   // 1. Search CJ products (GET /product/list)
   async searchProducts({ productNameEn, pageNum = 1, pageSize = 20, categoryId, minPrice, maxPrice } = {}) {
+    const normalizeUrl = (u) => {
+      if (!u) return '';
+      let s = String(u).trim();
+      if (s.startsWith('//')) s = 'https:' + s;
+      if (s.startsWith('http://')) s = s.replace(/^http:/, 'https:');
+      return s;
+    };
     const accessToken = await getAccessToken();
     const url = CJ_BASE_URL + '/product/list';
     const query = { 
@@ -150,7 +157,7 @@ export const cjClient = {
       name: p.productNameEn,
       sku: p.productSku,
       price: p.sellPrice,
-      image: p.productImage,
+      image: normalizeUrl(p.productImage),
       categoryId: p.categoryId,
       categoryName: p.categoryName,
       weight: p.productWeight,
@@ -169,6 +176,13 @@ export const cjClient = {
 
   // 2. Get product details with variants (GET /product/query)
   async getProductDetails(pid) {
+    const normalizeUrl = (u) => {
+      if (!u) return '';
+      let s = String(u).trim();
+      if (s.startsWith('//')) s = 'https:' + s;
+      if (s.startsWith('http://')) s = s.replace(/^http:/, 'https:');
+      return s;
+    };
     const accessToken = await getAccessToken();
     const url = CJ_BASE_URL + '/product/query';
     const query = { pid };
@@ -187,7 +201,7 @@ export const cjClient = {
       name: product.productNameEn,
       sku: product.productSku,
       price: product.sellPrice,
-      image: product.productImage,
+      image: normalizeUrl(product.productImage),
       description: product.description,
       weight: product.productWeight,
       categoryId: product.categoryId,
@@ -198,7 +212,7 @@ export const cjClient = {
         name: v.variantNameEn,
         sku: v.variantSku,
         price: v.variantSellPrice,
-        image: v.variantImage,
+        image: normalizeUrl(v.variantImage),
         weight: v.variantWeight,
         key: v.variantKey,
       })),
