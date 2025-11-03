@@ -11,18 +11,25 @@ const optionalAuth = (req, res, next) => {
   authenticateToken(req, res, next);
 };
 
-// Basic health for CJ integration
+// Health check for CJ integration
 router.get('/health', (_req, res) => {
   const status = cjClient.getStatus();
   res.json({ ok: true, status });
 });
 
-// Search CJ products (minimal pass-through)
-// Query params: q (keyword), page=1, pageSize=20
+// 1. Search CJ products
+// GET /api/cj/products?productNameEn=baby&pageNum=1&pageSize=20&minPrice=5&maxPrice=50
 router.get('/products', optionalAuth, async (req, res) => {
   try {
-    const { q = '', page = 1, pageSize = 20 } = req.query;
-    const result = await cjClient.searchProducts(String(q), Number(page), Number(pageSize));
+    const { productNameEn, pageNum, pageSize, categoryId, minPrice, maxPrice } = req.query;
+    const result = await cjClient.searchProducts({
+      productNameEn,
+      pageNum: pageNum ? Number(pageNum) : 1,
+      pageSize: pageSize ? Number(pageSize) : 20,
+      categoryId,
+      minPrice: minPrice ? Number(minPrice) : undefined,
+      maxPrice: maxPrice ? Number(maxPrice) : undefined,
+    });
     res.json(result);
   } catch (err) {
     console.error('CJ products search error:', err);
@@ -30,11 +37,39 @@ router.get('/products', optionalAuth, async (req, res) => {
   }
 });
 
-// Create order in CJ from our local order payload
+// 2. Get product details with variants
+// GET /api/cj/products/:pid
+router.get('/products/:pid', optionalAuth, async (req, res) => {
+  try {
+    const { pid } = req.params;
+    const result = await cjClient.getProductDetails(pid);
+    res.json(result);
+  } catch (err) {
+    console.error('CJ product details error:', err);
+    res.status(502).json({ error: 'CJ product details failed', details: err.message });
+  }
+});
+
+// 3. Check inventory for a variant
+// GET /api/cj/inventory/:vid
+router.get('/inventory/:vid', optionalAuth, async (req, res) => {
+  try {
+    const { vid } = req.params;
+    const result = await cjClient.getInventory(vid);
+    res.json({ vid, inventory: result });
+  } catch (err) {
+    console.error('CJ inventory check error:', err);
+    res.status(502).json({ error: 'CJ inventory check failed', details: err.message });
+  }
+});
+
+// 4. Create order in CJ
+// POST /api/cj/orders
+// Body: { orderNumber, shippingCountryCode, shippingCustomerName, shippingAddress, logisticName, fromCountryCode, products: [{vid, quantity}] }
 router.post('/orders', optionalAuth, async (req, res) => {
   try {
-    const orderPayload = req.body;
-    const result = await cjClient.createOrder(orderPayload);
+    const orderData = req.body;
+    const result = await cjClient.createOrder(orderData);
     res.status(201).json(result);
   } catch (err) {
     console.error('CJ create order error:', err);
@@ -42,8 +77,34 @@ router.post('/orders', optionalAuth, async (req, res) => {
   }
 });
 
-// Webhook endpoint for CJ fulfillment/tracking updates
-// NOTE: Configure CJ webhook to POST JSON to /api/cj/webhook
+// 5. Get order status
+// GET /api/cj/orders/:orderId
+router.get('/orders/:orderId', optionalAuth, async (req, res) => {
+  try {
+    const { orderId } = req.params;
+    const result = await cjClient.getOrderStatus(orderId);
+    res.json(result);
+  } catch (err) {
+    console.error('CJ order status error:', err);
+    res.status(502).json({ error: 'CJ order status check failed', details: err.message });
+  }
+});
+
+// 6. Get tracking info
+// GET /api/cj/tracking/:trackNumber
+router.get('/tracking/:trackNumber', optionalAuth, async (req, res) => {
+  try {
+    const { trackNumber } = req.params;
+    const result = await cjClient.getTracking(trackNumber);
+    res.json({ trackNumber, tracking: result });
+  } catch (err) {
+    console.error('CJ tracking error:', err);
+    res.status(502).json({ error: 'CJ tracking check failed', details: err.message });
+  }
+});
+
+// 7. Webhook endpoint for CJ order/tracking updates
+// POST /api/cj/webhook
 router.post('/webhook', express.json({ type: 'application/json' }), async (req, res) => {
   try {
     const signature = req.headers['x-cj-signature'] || req.headers['x-signature'];
@@ -54,10 +115,13 @@ router.post('/webhook', express.json({ type: 'application/json' }), async (req, 
       return res.status(401).json({ error: 'Invalid CJ webhook signature' });
     }
 
-    // TODO: Map payload to local order updates (tracking/status)
+    // Log webhook for debugging
     console.log('📦 CJ Webhook received:', JSON.stringify(req.body, null, 2));
 
-    // Respond quickly to acknowledge
+    // TODO: Process webhook data (update order status, tracking in your database)
+    // Webhook types: order, logistics, stock, product
+    // Example: Update order tracking number when CJ ships the order
+
     res.status(200).json({ received: true });
   } catch (err) {
     console.error('CJ webhook error:', err);
