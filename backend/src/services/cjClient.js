@@ -18,6 +18,21 @@ let cjTokenCache = {
   refreshTokenExpiry: 0,
 };
 
+// CJ has a strict QPS limit (often 1 request/second). We'll throttle and retry.
+let lastCJCallAt = 0;
+const CJ_MIN_INTERVAL_MS = 1100; // a bit over 1s for safety
+
+async function sleep(ms) { return new Promise((r) => setTimeout(r, ms)); }
+
+async function ensureThrottle() {
+  const now = Date.now();
+  const diff = now - lastCJCallAt;
+  if (diff < CJ_MIN_INTERVAL_MS) {
+    await sleep(CJ_MIN_INTERVAL_MS - diff);
+  }
+  lastCJCallAt = Date.now();
+}
+
 
 // Helper: simple fetch wrapper (uses global fetch in Node >=18)
 async function http(method, url, { query, body, headers } = {}) {
@@ -29,24 +44,41 @@ async function http(method, url, { query, body, headers } = {}) {
     });
     fullUrl += '?' + params.toString();
   }
-  const res = await fetch(fullUrl, {
-    method,
-    headers: {
-      'Content-Type': 'application/json',
-      ...(headers || {}),
-    },
-    body: body ? JSON.stringify(body) : undefined,
-  });
-  const text = await res.text();
-  let json;
-  try { json = text ? JSON.parse(text) : {}; } catch { json = { raw: text }; }
-  if (!res.ok) {
+
+  // Up to 3 attempts with backoff on 429 Too Many Requests
+  const maxAttempts = 3;
+  let attempt = 0;
+  while (true) {
+    attempt += 1;
+    await ensureThrottle();
+    const res = await fetch(fullUrl, {
+      method,
+      headers: {
+        'Content-Type': 'application/json',
+        ...(headers || {}),
+      },
+      body: body ? JSON.stringify(body) : undefined,
+    });
+
+    const text = await res.text();
+    let json;
+    try { json = text ? JSON.parse(text) : {}; } catch { json = { raw: text }; }
+
+    if (res.ok) return json;
+
     const err = new Error(`CJ HTTP ${res.status}`);
     err.status = res.status;
     err.response = json;
+
+    // CJ rate limit: sometimes returns 429 with code/message in body
+    const isRateLimited = res.status === 429 || json?.code === 1600200 || /Too Many Requests|QPS limit/i.test(json?.message || '');
+    if (isRateLimited && attempt < maxAttempts) {
+      // wait a bit longer each retry
+      await sleep(CJ_MIN_INTERVAL_MS * attempt);
+      continue;
+    }
     throw err;
   }
-  return json;
 }
 
 // Get and cache CJ access token
