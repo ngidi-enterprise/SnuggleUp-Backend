@@ -9,24 +9,32 @@ It ships in a safe default state (mock mode) until you add credentials.
 
 ## 1) Environment Variables
 
-Add the following to your backend environment (.env):
+Add the following to your Render backend environment:
 
 ```
-# CJ API
-CJ_BASE_URL=https://openapi.cjdropshipping.com   # Confirm from CJ Open API docs
-CJ_ACCESS_TOKEN=                                 # Quick-start: paste a valid token here
+# CJ API (Required)
+CJ_EMAIL=support@snuggleup.co.za
+CJ_API_KEY=c8d6ec9d12be40cf8117bf79ce721ba1
+CJ_BASE_URL=https://developers.cjdropshipping.com/api2.0/v1
 
-# Optional advanced (if you prefer app key/secret flow)
-CJ_APP_KEY=
-CJ_APP_SECRET=
-
-# Webhook verification (optional)
+# Webhook verification (Optional, for production)
 CJ_WEBHOOK_SECRET=
 ```
 
-Notes:
-- Start with `CJ_ACCESS_TOKEN` for the quickest path. You can obtain a token from your CJ developer console or via their OAuth/token API. Once stable, you can switch to the app key/secret token flow.
-- Set `CJ_BASE_URL` per official docs (examples often use `https://openapi.cjdropshipping.com`).
+**How to add in Render:**
+1. Go to https://dashboard.render.com/web/srv-d3m3brumcj7s73achkg0
+2. Click **Environment** in left sidebar
+3. Click **Add Environment Variable** for each:
+   - `CJ_EMAIL` = `support@snuggleup.co.za`
+   - `CJ_API_KEY` = `c8d6ec9d12be40cf8117bf79ce721ba1`
+   - `CJ_BASE_URL` = `https://developers.cjdropshipping.com/api2.0/v1`
+4. Click **Save Changes**
+5. Render will auto-deploy (~2 minutes)
+
+**How it works:**
+- Backend will POST to `https://developers.cjdropshipping.com/api2.0/v1/authentication/getAccessToken` with your email and API key
+- CJ returns an access token (valid 15 days) which is cached and used for all API calls
+- Token auto-refreshes when needed
 
 ## 2) Endpoints
 
