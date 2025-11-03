@@ -40,28 +40,85 @@ CJ_WEBHOOK_SECRET=
 
 Backend mounts under `/api/cj`:
 
-- `GET /api/cj/health` — Status of config and availability.
-- `GET /api/cj/products?q=keyword&page=1&pageSize=20` — Searches CJ products. Returns mock data if `CJ_ACCESS_TOKEN` is not set.
-- `POST /api/cj/orders` — Creates an order in CJ (payload mirrors your order model; adjust as needed).
-- `POST /api/cj/webhook` — Receives CJ webhooks. Configure in CJ dashboard to point to this URL.
+### Product Endpoints
+- `GET /api/cj/health` — Health check and config status
+- `GET /api/cj/products?productNameEn=baby&pageNum=1&pageSize=20&minPrice=5&maxPrice=50` — Search CJ products
+- `GET /api/cj/products/:pid` — Get product details with variants
+- `GET /api/cj/inventory/:vid` — Check real-time inventory for a variant
+
+### Order Endpoints
+- `POST /api/cj/orders` — Create order in CJ
+  - Required fields: `orderNumber`, `shippingCountryCode`, `shippingCustomerName`, `shippingAddress`, `logisticName`, `fromCountryCode`, `products: [{vid, quantity}]`
+- `GET /api/cj/orders/:orderId` — Get order status and tracking info
+
+### Tracking Endpoints
+- `GET /api/cj/tracking/:trackNumber` — Get tracking updates for shipped orders
+
+### Webhook Endpoint
+- `POST /api/cj/webhook` — Receives CJ webhooks for order/tracking updates (configure in CJ dashboard)
 
 ## 3) Implementation Details
 
-- Client implementation lives in `backend/src/services/cjClient.js`.
-- Uses global `fetch` (Node 18+). If your runtime is older, upgrade Node or add `node-fetch`.
-- Paths `/api/product/list` and `/api/order/create` are placeholders — replace with paths from the official CJ Open API for your account tier. The code is structured so you only need to edit the `path` strings and (optionally) response mapping.
+- Client implementation lives in `backend/src/services/cjClient.js`
+- Uses global `fetch` (Node 18+)
+- Production-ready endpoints implemented:
+  - **searchProducts**: `GET /product/list` - Search products by keyword, price, category
+  - **getProductDetails**: `GET /product/query` - Get full product details with variants
+  - **getInventory**: `GET /product/stock/queryByVid` - Real-time inventory check
+  - **createOrder**: `POST /shopping/order/createOrderV2` - Create order with balance payment
+  - **getOrderStatus**: `GET /shopping/order/getOrderDetail` - Get order status and tracking
+  - **getTracking**: `GET /logistic/trackInfo` - Get shipment tracking updates
 
-## 4) Local Testing
+## 4) Testing the Integration
 
-- Without credentials, `GET /api/cj/products` returns a mock product so you can build the UI.
-- With `CJ_ACCESS_TOKEN` set, it will call CJ and pass back data.
+Once deployed to Render with environment variables:
+
+**Test product search:**
+```bash
+curl https://snuggleup-backend.onrender.com/api/cj/products?productNameEn=baby&pageNum=1&pageSize=10
+```
+
+**Test product details:**
+```bash
+curl https://snuggleup-backend.onrender.com/api/cj/products/PRODUCT_PID_HERE
+```
+
+**Test inventory check:**
+```bash
+curl https://snuggleup-backend.onrender.com/api/cj/inventory/VARIANT_VID_HERE
+```
 
 ## 5) Next Steps
 
-- Confirm the exact CJ Open API endpoint paths for product search and order creation and update them in `cjClient.js`.
-- Map CJ product fields precisely to your store schema in the `searchProducts` mapping.
-- Extend `verifyWebhook` based on CJ's signing algorithm and headers.
-- Wire up order status updates in `/api/cj/webhook` to update your DB (e.g., set tracking number and status to fulfilled).
+### Backend (Completed ✅)
+- ✅ Implement production CJ API endpoints
+- ✅ Token caching with auto-refresh
+- ✅ Product search, details, inventory check
+- ✅ Order creation and status tracking
+- ✅ Webhook endpoint for CJ updates
+
+### To Deploy
+1. **Option A: GitHub Desktop**
+   - Open GitHub Desktop
+   - Commit changes: "Add CJ Dropshipping integration"
+   - Push to GitHub → Render auto-deploys
+
+2. **Option B: Render Manual Deploy**
+   - Go to https://dashboard.render.com/web/srv-d3m3brumcj7s73achkg0
+   - Click "Manual Deploy" → "Deploy latest commit"
+
+3. **Add Environment Variables in Render:**
+   - `CJ_EMAIL` = `support@snuggleup.co.za`
+   - `CJ_API_KEY` = `c8d6ec9d12be40cf8117bf79ce721ba1`
+   - `CJ_BASE_URL` = `https://developers.cjdropshipping.com/api2.0/v1`
+   - Click "Save Changes" → Render will redeploy
+
+### Frontend Integration
+- Build product search UI that calls `/api/cj/products`
+- Display product details from `/api/cj/products/:pid`
+- Check inventory before checkout using `/api/cj/inventory/:vid`
+- Create CJ orders when customers place orders via `/api/cj/orders`
+- Poll `/api/cj/orders/:orderId` or use webhooks to track fulfillment
 
 ## 6) Troubleshooting
 
