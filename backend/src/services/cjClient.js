@@ -92,39 +92,207 @@ export const cjClient = {
     };
   },
 
-  async searchProducts(keyword, page = 1, pageSize = 20) {
+  // 1. Search CJ products (GET /product/list)
+  async searchProducts({ productNameEn, pageNum = 1, pageSize = 20, categoryId, minPrice, maxPrice } = {}) {
     const accessToken = await getAccessToken();
     const url = CJ_BASE_URL + '/product/list';
-    const query = { keyword: keyword || '', page, pageSize };
+    const query = { 
+      productNameEn: productNameEn || '',
+      pageNum,
+      pageSize,
+      categoryId,
+      minPrice,
+      maxPrice,
+    };
     const json = await http('GET', url, {
       query,
       headers: { 'CJ-Access-Token': accessToken },
     });
-    const items = (json?.data?.list || json?.result || json?.data || []).map((p) => ({
-      id: p.id || p.productId || p.sku || String(p.id || ''),
-      name: p.name || p.productName || p.title,
-      sku: p.sku || p.productSku || p.code,
-      price: p.price || p.sellPrice || p.wholesalePrice || 0,
-      images: p.images || p.imageUrls || (p.image ? [p.image] : []),
-      variants: p.variants || p.varients || [],
-      raw: p,
+    
+    if (!json.result || !json.data) {
+      throw new Error('CJ searchProducts failed: ' + (json.message || 'Unknown error'));
+    }
+
+    const items = (json.data.list || []).map((p) => ({
+      pid: p.pid,
+      name: p.productNameEn,
+      sku: p.productSku,
+      price: p.sellPrice,
+      image: p.productImage,
+      categoryId: p.categoryId,
+      categoryName: p.categoryName,
+      weight: p.productWeight,
+      isFreeShipping: p.isFreeShipping,
+      listedNum: p.listedNum,
     }));
-    return { source: 'cj', items, page, pageSize, raw: json };
+
+    return {
+      source: 'cj',
+      items,
+      pageNum: json.data.pageNum,
+      pageSize: json.data.pageSize,
+      total: json.data.total,
+    };
   },
 
-  async createOrder(orderPayload) {
+  // 2. Get product details with variants (GET /product/query)
+  async getProductDetails(pid) {
     const accessToken = await getAccessToken();
-    if (!orderPayload || !orderPayload.items || !Array.isArray(orderPayload.items)) {
-      throw new Error('Invalid order payload: items[] required');
-    }
-    const url = CJ_BASE_URL + '/order/create';
-    const json = await http('POST', url, {
-      body: orderPayload,
+    const url = CJ_BASE_URL + '/product/query';
+    const query = { pid };
+    const json = await http('GET', url, {
+      query,
       headers: { 'CJ-Access-Token': accessToken },
     });
-    return { ok: true, raw: json };
+
+    if (!json.result || !json.data) {
+      throw new Error('CJ getProductDetails failed: ' + (json.message || 'Unknown error'));
+    }
+
+    const product = json.data;
+    return {
+      pid: product.pid,
+      name: product.productNameEn,
+      sku: product.productSku,
+      price: product.sellPrice,
+      image: product.productImage,
+      description: product.description,
+      weight: product.productWeight,
+      categoryId: product.categoryId,
+      categoryName: product.categoryName,
+      variants: (product.variants || []).map((v) => ({
+        vid: v.vid,
+        pid: v.pid,
+        name: v.variantNameEn,
+        sku: v.variantSku,
+        price: v.variantSellPrice,
+        image: v.variantImage,
+        weight: v.variantWeight,
+        key: v.variantKey,
+      })),
+    };
   },
 
+  // 3. Check inventory for a variant (GET /product/stock/queryByVid)
+  async getInventory(vid) {
+    const accessToken = await getAccessToken();
+    const url = CJ_BASE_URL + '/product/stock/queryByVid';
+    const query = { vid };
+    const json = await http('GET', url, {
+      query,
+      headers: { 'CJ-Access-Token': accessToken },
+    });
+
+    if (!json.result || !json.data) {
+      throw new Error('CJ getInventory failed: ' + (json.message || 'Unknown error'));
+    }
+
+    return (json.data || []).map((stock) => ({
+      vid: stock.vid,
+      warehouseId: stock.areaId,
+      warehouseName: stock.areaEn,
+      countryCode: stock.countryCode,
+      totalInventory: stock.totalInventoryNum,
+      cjInventory: stock.cjInventoryNum,
+      factoryInventory: stock.factoryInventoryNum,
+    }));
+  },
+
+  // 4. Create order (POST /shopping/order/createOrderV2)
+  async createOrder(orderData) {
+    const accessToken = await getAccessToken();
+    const url = CJ_BASE_URL + '/shopping/order/createOrderV2';
+    
+    // Validate required fields
+    if (!orderData.orderNumber) throw new Error('orderNumber is required');
+    if (!orderData.shippingCountryCode) throw new Error('shippingCountryCode is required');
+    if (!orderData.shippingCustomerName) throw new Error('shippingCustomerName is required');
+    if (!orderData.shippingAddress) throw new Error('shippingAddress is required');
+    if (!orderData.logisticName) throw new Error('logisticName is required');
+    if (!orderData.fromCountryCode) throw new Error('fromCountryCode is required');
+    if (!orderData.products || orderData.products.length === 0) {
+      throw new Error('products array is required');
+    }
+
+    const json = await http('POST', url, {
+      body: orderData,
+      headers: { 'CJ-Access-Token': accessToken },
+    });
+
+    if (!json.result || !json.data) {
+      throw new Error('CJ createOrder failed: ' + (json.message || 'Unknown error'));
+    }
+
+    return {
+      orderId: json.data.orderId,
+      orderNumber: json.data.orderNumber,
+      shipmentOrderId: json.data.shipmentOrderId,
+      orderAmount: json.data.orderAmount,
+      productAmount: json.data.productAmount,
+      postageAmount: json.data.postageAmount,
+      orderStatus: json.data.orderStatus,
+      productInfoList: json.data.productInfoList,
+    };
+  },
+
+  // 5. Get order status (GET /shopping/order/getOrderDetail)
+  async getOrderStatus(orderId) {
+    const accessToken = await getAccessToken();
+    const url = CJ_BASE_URL + '/shopping/order/getOrderDetail';
+    const query = { orderId };
+    const json = await http('GET', url, {
+      query,
+      headers: { 'CJ-Access-Token': accessToken },
+    });
+
+    if (!json.result || !json.data) {
+      throw new Error('CJ getOrderStatus failed: ' + (json.message || 'Unknown error'));
+    }
+
+    const order = json.data;
+    return {
+      orderId: order.orderId,
+      orderNum: order.orderNum,
+      cjOrderId: order.cjOrderId,
+      orderStatus: order.orderStatus,
+      trackNumber: order.trackNumber,
+      trackingUrl: order.trackingUrl,
+      logisticName: order.logisticName,
+      orderAmount: order.orderAmount,
+      createDate: order.createDate,
+      paymentDate: order.paymentDate,
+      productList: order.productList,
+    };
+  },
+
+  // 6. Get tracking info (GET /logistic/trackInfo)
+  async getTracking(trackNumber) {
+    const accessToken = await getAccessToken();
+    const url = CJ_BASE_URL + '/logistic/trackInfo';
+    const query = { trackNumber };
+    const json = await http('GET', url, {
+      query,
+      headers: { 'CJ-Access-Token': accessToken },
+    });
+
+    if (!json.result || !json.data) {
+      throw new Error('CJ getTracking failed: ' + (json.message || 'Unknown error'));
+    }
+
+    return (json.data || []).map((track) => ({
+      trackingNumber: track.trackingNumber,
+      logisticName: track.logisticName,
+      trackingFrom: track.trackingFrom,
+      trackingTo: track.trackingTo,
+      deliveryDay: track.deliveryDay,
+      deliveryTime: track.deliveryTime,
+      trackingStatus: track.trackingStatus,
+      lastMileCarrier: track.lastMileCarrier,
+      lastTrackNumber: track.lastTrackNumber,
+    }));
+  },
+
+  // Webhook verification
   verifyWebhook(headers, body) {
     if (!CJ_WEBHOOK_SECRET) return true;
     const payload = typeof body === 'string' ? body : JSON.stringify(body);
