@@ -5,22 +5,31 @@ import crypto from 'crypto';
 // 1) Token mode: Provide CJ_ACCESS_TOKEN (recommended quick start)
 // 2) App mode (scaffold): Provide CJ_APP_KEY/CJ_APP_SECRET and implement token/sign per CJ docs
 
-const CJ_BASE_URL = process.env.CJ_BASE_URL || 'https://open-api-placeholder.cjdropshipping.com';
-const CJ_ACCESS_TOKEN = process.env.CJ_ACCESS_TOKEN || '';
-const CJ_APP_KEY = process.env.CJ_APP_KEY || '';
-const CJ_APP_SECRET = process.env.CJ_APP_SECRET || '';
+
+const CJ_BASE_URL = process.env.CJ_BASE_URL || 'https://developers.cjdropshipping.com/api2.0/v1';
+const CJ_EMAIL = process.env.CJ_EMAIL || '';
+const CJ_API_KEY = process.env.CJ_API_KEY || '';
 const CJ_WEBHOOK_SECRET = process.env.CJ_WEBHOOK_SECRET || '';
 
-// Helper: simple fetch wrapper (uses global fetch in Node >=18)
-async function http(method, path, { query, body, headers } = {}) {
-  const url = new URL(path, CJ_BASE_URL);
-  if (query) {
-    Object.entries(query).forEach(([k, v]) => {
-      if (v !== undefined && v !== null && v !== '') url.searchParams.set(k, String(v));
-    });
-  }
+let cjTokenCache = {
+  accessToken: '',
+  refreshToken: '',
+  accessTokenExpiry: 0,
+  refreshTokenExpiry: 0,
+};
 
-  const res = await fetch(url, {
+
+// Helper: simple fetch wrapper (uses global fetch in Node >=18)
+async function http(method, url, { query, body, headers } = {}) {
+  let fullUrl = url;
+  if (query) {
+    const params = new URLSearchParams();
+    Object.entries(query).forEach(([k, v]) => {
+      if (v !== undefined && v !== null && v !== '') params.set(k, String(v));
+    });
+    fullUrl += '?' + params.toString();
+  }
+  const res = await fetch(fullUrl, {
     method,
     headers: {
       'Content-Type': 'application/json',
@@ -28,7 +37,6 @@ async function http(method, path, { query, body, headers } = {}) {
     },
     body: body ? JSON.stringify(body) : undefined,
   });
-
   const text = await res.text();
   let json;
   try { json = text ? JSON.parse(text) : {}; } catch { json = { raw: text }; }
@@ -41,11 +49,32 @@ async function http(method, path, { query, body, headers } = {}) {
   return json;
 }
 
-function requireToken() {
-  if (!CJ_ACCESS_TOKEN) {
-    throw new Error('CJ_ACCESS_TOKEN is not set. Set it in your environment to enable CJ API calls.');
+// Get and cache CJ access token
+async function getAccessToken(force = false) {
+  const now = Date.now();
+  if (!force && cjTokenCache.accessToken && cjTokenCache.accessTokenExpiry > now + 60000) {
+    return cjTokenCache.accessToken;
   }
+  if (!CJ_EMAIL || !CJ_API_KEY) {
+    throw new Error('CJ_EMAIL and CJ_API_KEY must be set in environment');
+  }
+  const url = 'https://developers.cjdropshipping.com/api2.0/v1/authentication/getAccessToken';
+  const resp = await http('POST', url, {
+    body: {
+      email: CJ_EMAIL,
+      apiKey: CJ_API_KEY,
+    },
+  });
+  if (!resp.result || !resp.data?.accessToken) {
+    throw new Error('CJ getAccessToken failed: ' + (resp.message || 'Unknown error'));
+  }
+  cjTokenCache.accessToken = resp.data.accessToken;
+  cjTokenCache.refreshToken = resp.data.refreshToken;
+  cjTokenCache.accessTokenExpiry = new Date(resp.data.accessTokenExpiryDate).getTime();
+  cjTokenCache.refreshTokenExpiry = new Date(resp.data.refreshTokenExpiryDate).getTime();
+  return cjTokenCache.accessToken;
 }
+
 
 // Placeholder signing (for webhook verification)
 function hmacSHA256(content, secret) {
@@ -56,46 +85,21 @@ export const cjClient = {
   getStatus() {
     return {
       baseUrl: CJ_BASE_URL,
-      hasAccessToken: Boolean(CJ_ACCESS_TOKEN),
-      hasAppKey: Boolean(CJ_APP_KEY),
-      hasAppSecret: Boolean(CJ_APP_SECRET),
+      hasEmail: Boolean(CJ_EMAIL),
+      hasApiKey: Boolean(CJ_API_KEY),
       webhookVerification: Boolean(CJ_WEBHOOK_SECRET),
+      tokenExpiry: cjTokenCache.accessTokenExpiry,
     };
   },
 
-  // Quick start: search products by keyword
   async searchProducts(keyword, page = 1, pageSize = 20) {
-    if (!CJ_ACCESS_TOKEN) {
-      // Mock mode for UI dev
-      return {
-        source: 'mock',
-        items: [
-          {
-            id: 'CJDEMO123',
-            name: `Demo ${keyword || 'Product'}`,
-            sku: 'DEMO-SKU',
-            price: 9.99,
-            images: ['https://picsum.photos/seed/cj1/600/600'],
-            variants: [{ sku: 'DEMO-SKU-1', price: 9.99 }],
-          },
-        ],
-        page,
-        pageSize,
-        total: 1,
-      };
-    }
-
-    // NOTE: Replace the path/params with official CJ product search once you have docs.
-    // Below is a conservative placeholder that many CJ integrations use.
-    const path = '/api/product/list';
-    const query = { keyword: keyword || '', page: page, pageSize };
-
-    const json = await http('GET', path, {
+    const accessToken = await getAccessToken();
+    const url = CJ_BASE_URL + '/product/list';
+    const query = { keyword: keyword || '', page, pageSize };
+    const json = await http('GET', url, {
       query,
-      headers: { Authorization: `Bearer ${CJ_ACCESS_TOKEN}` },
+      headers: { 'CJ-Access-Token': accessToken },
     });
-
-    // Map to frontend-friendly shape (adjust as per actual CJ response)
     const items = (json?.data?.list || json?.result || json?.data || []).map((p) => ({
       id: p.id || p.productId || p.sku || String(p.id || ''),
       name: p.name || p.productName || p.title,
@@ -105,34 +109,27 @@ export const cjClient = {
       variants: p.variants || p.varients || [],
       raw: p,
     }));
-
     return { source: 'cj', items, page, pageSize, raw: json };
   },
 
-  // Create an order in CJ (scaffold)
   async createOrder(orderPayload) {
-    requireToken();
-    // Validate minimal payload (you can expand this based on your order model)
+    const accessToken = await getAccessToken();
     if (!orderPayload || !orderPayload.items || !Array.isArray(orderPayload.items)) {
       throw new Error('Invalid order payload: items[] required');
     }
-
-    // Placeholder path; update to CJ order creation endpoint
-    const path = '/api/order/create';
-    const json = await http('POST', path, {
+    const url = CJ_BASE_URL + '/order/create';
+    const json = await http('POST', url, {
       body: orderPayload,
-      headers: { Authorization: `Bearer ${CJ_ACCESS_TOKEN}` },
+      headers: { 'CJ-Access-Token': accessToken },
     });
-
     return { ok: true, raw: json };
   },
 
-  // Verify CJ webhook signature (scaffold)
   verifyWebhook(headers, body) {
-    if (!CJ_WEBHOOK_SECRET) return true; // If no secret configured, accept for development
+    if (!CJ_WEBHOOK_SECRET) return true;
     const payload = typeof body === 'string' ? body : JSON.stringify(body);
     const expected = hmacSHA256(payload + (headers.timestamp || headers['x-cj-timestamp'] || ''), CJ_WEBHOOK_SECRET);
     const provided = (headers.signature || headers['x-cj-signature'] || '').toString();
     return expected === provided;
-  },
+  }
 };
