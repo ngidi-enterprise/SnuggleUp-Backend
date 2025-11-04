@@ -73,6 +73,32 @@ async function initDb() {
     // Column might already be TEXT or migration already ran
     console.log('ℹ️ orders.user_id migration skipped:', err.message);
   }
+
+  // Admin role column
+  await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS is_admin BOOLEAN DEFAULT FALSE;`);
+
+  // Curated products table - stores selected CJ products with custom pricing
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS curated_products (
+      id SERIAL PRIMARY KEY,
+      cj_pid TEXT UNIQUE NOT NULL,
+      cj_vid TEXT,
+      product_name TEXT NOT NULL,
+      product_description TEXT,
+      product_image TEXT,
+      cj_cost_price REAL NOT NULL,
+      suggested_price REAL NOT NULL,
+      custom_price REAL,
+      is_active BOOLEAN DEFAULT TRUE,
+      category TEXT,
+      stock_quantity INTEGER DEFAULT 0,
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    );
+  `);
+
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_curated_products_active ON curated_products(is_active);`);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_curated_products_category ON curated_products(category);`);
   
   console.log('✅ PostgreSQL database initialized successfully');
 }
