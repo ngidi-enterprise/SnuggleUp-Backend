@@ -5,6 +5,9 @@ import { fileURLToPath } from 'url';
 import { dirname } from 'path';
 import { router as paymentsRouter } from './routes/payments.js';
 import { router as cjRouter } from './routes/cj.js';
+import { router as adminRouter } from './routes/admin.js';
+import { router as setupRouter } from './routes/setup.js';
+import { router as productsRouter } from './routes/products.js';
 
 // Load environment variables
 dotenv.config();
@@ -33,6 +36,9 @@ app.use(express.json());
 // Routes
 app.use('/api/payments', paymentsRouter);
 app.use('/api/cj', cjRouter);
+app.use('/api/admin', adminRouter);
+app.use('/api/setup', setupRouter);
+app.use('/api/products', productsRouter); // Public curated products
 
 // Health check
 app.get('/health', (req, res) => {
