@@ -10,11 +10,12 @@ const CJ_BASE_URL = process.env.CJ_BASE_URL || 'https://developers.cjdropshippin
 const CJ_EMAIL = process.env.CJ_EMAIL || '';
 const CJ_API_KEY = process.env.CJ_API_KEY || '';
 const CJ_WEBHOOK_SECRET = process.env.CJ_WEBHOOK_SECRET || '';
+const CJ_ACCESS_TOKEN = process.env.CJ_ACCESS_TOKEN || ''; // Optional: pre-set token to avoid rate limits
 
 let cjTokenCache = {
-  accessToken: '',
+  accessToken: CJ_ACCESS_TOKEN, // Start with env token if provided
   refreshToken: '',
-  accessTokenExpiry: 0,
+  accessTokenExpiry: CJ_ACCESS_TOKEN ? Date.now() + (15 * 24 * 60 * 60 * 1000) : 0, // 15 days if pre-set
   refreshTokenExpiry: 0,
 };
 
@@ -84,27 +85,42 @@ async function http(method, url, { query, body, headers } = {}) {
 // Get and cache CJ access token
 async function getAccessToken(force = false) {
   const now = Date.now();
-  if (!force && cjTokenCache.accessToken && cjTokenCache.accessTokenExpiry > now + 60000) {
+  // Use cached token if valid (check with 10 minute buffer instead of 1 minute)
+  if (!force && cjTokenCache.accessToken && cjTokenCache.accessTokenExpiry > now + 600000) {
+    console.log('✅ Using cached CJ access token');
     return cjTokenCache.accessToken;
   }
   if (!CJ_EMAIL || !CJ_API_KEY) {
     throw new Error('CJ_EMAIL and CJ_API_KEY must be set in environment');
   }
+  
+  console.log('🔄 Requesting new CJ access token...');
   const url = 'https://developers.cjdropshipping.com/api2.0/v1/authentication/getAccessToken';
-  const resp = await http('POST', url, {
-    body: {
-      email: CJ_EMAIL,
-      apiKey: CJ_API_KEY,
-    },
-  });
-  if (!resp.result || !resp.data?.accessToken) {
-    throw new Error('CJ getAccessToken failed: ' + (resp.message || 'Unknown error'));
+  
+  try {
+    const resp = await http('POST', url, {
+      body: {
+        email: CJ_EMAIL,
+        apiKey: CJ_API_KEY,
+      },
+    });
+    if (!resp.result || !resp.data?.accessToken) {
+      throw new Error('CJ getAccessToken failed: ' + (resp.message || 'Unknown error'));
+    }
+    cjTokenCache.accessToken = resp.data.accessToken;
+    cjTokenCache.refreshToken = resp.data.refreshToken;
+    cjTokenCache.accessTokenExpiry = new Date(resp.data.accessTokenExpiryDate).getTime();
+    cjTokenCache.refreshTokenExpiry = new Date(resp.data.refreshTokenExpiryDate).getTime();
+    console.log('✅ CJ access token obtained, expires:', new Date(cjTokenCache.accessTokenExpiry).toISOString());
+    return cjTokenCache.accessToken;
+  } catch (err) {
+    // If we hit rate limit but have an old token, use it anyway
+    if (err.status === 429 && cjTokenCache.accessToken) {
+      console.warn('⚠️ CJ token rate limit hit, using cached token (may be expired)');
+      return cjTokenCache.accessToken;
+    }
+    throw err;
   }
-  cjTokenCache.accessToken = resp.data.accessToken;
-  cjTokenCache.refreshToken = resp.data.refreshToken;
-  cjTokenCache.accessTokenExpiry = new Date(resp.data.accessTokenExpiryDate).getTime();
-  cjTokenCache.refreshTokenExpiry = new Date(resp.data.refreshTokenExpiryDate).getTime();
-  return cjTokenCache.accessToken;
 }
 
 
