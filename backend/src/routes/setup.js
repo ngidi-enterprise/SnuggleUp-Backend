@@ -16,14 +16,24 @@ router.post('/make-admin', async (req, res) => {
       return res.status(403).json({ error: 'Invalid secret key' });
     }
 
-    // Make the user admin
-    const result = await pool.query(
+    // Make the user admin; if not found, auto-provision a local user row, then promote
+    let result = await pool.query(
       'UPDATE users SET is_admin = TRUE WHERE email = $1 RETURNING id, email, name, is_admin',
       [email]
     );
 
     if (result.rows.length === 0) {
-      return res.status(404).json({ error: 'User not found. Please register first.' });
+      // Auto-create minimal user row for Supabase-only accounts
+      const derivedName = (String(email).split('@')[0] || 'User').replace(/[^a-zA-Z0-9 _.-]/g, '');
+      await pool.query(
+        'INSERT INTO users (email, password, name, is_admin) VALUES ($1, $2, $3, TRUE)',
+        [email, 'external-auth', derivedName || 'User']
+      );
+      // Fetch created row
+      result = await pool.query(
+        'SELECT id, email, name, is_admin FROM users WHERE email = $1',
+        [email]
+      );
     }
 
     res.json({
