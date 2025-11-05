@@ -1,7 +1,15 @@
 import express from 'express';
+import cors from 'cors';
 import pool from '../db.js';
 
 export const router = express.Router();
+
+// Allow all origins for setup endpoints (temporary, for initial admin setup)
+router.use(cors({
+  origin: '*',
+  methods: ['GET', 'POST', 'OPTIONS'],
+  allowedHeaders: ['Content-Type']
+}));
 
 // Temporary endpoint to make specific user admin
 // TODO: Remove this endpoint once initial admin is set up
