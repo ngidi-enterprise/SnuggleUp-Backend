@@ -2,6 +2,7 @@ import { authenticateToken } from './auth.js';
 import pool from '../db.js';
 
 // Middleware to check if user is admin (by email) and auto-provision local user row if missing
+// Updated: Nov 5, 2025 - Force redeploy
 export const requireAdmin = async (req, res, next) => {
   // First authenticate the token (supports Supabase + app JWTs)
   authenticateToken(req, res, async (err) => {
