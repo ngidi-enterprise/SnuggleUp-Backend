@@ -38,13 +38,13 @@ router.get('/analytics', async (req, res) => {
     // Top selling products (from order items)
     const topProductsResult = await pool.query(`
       SELECT 
-        jsonb_array_elements(items::jsonb)->>'name' as product_name,
-        jsonb_array_elements(items::jsonb)->>'id' as product_id,
+        item->>'name' as product_name,
+        item->>'id' as product_id,
         COUNT(*) as times_ordered,
-        SUM((jsonb_array_elements(items::jsonb)->>'price')::numeric) as total_revenue
-      FROM orders
+        SUM((item->>'price')::numeric * (item->>'quantity')::numeric) as total_revenue
+      FROM orders, jsonb_array_elements(items::jsonb) as item
       WHERE status = 'completed'
-      GROUP BY product_name, product_id
+      GROUP BY item->>'name', item->>'id'
       ORDER BY times_ordered DESC
       LIMIT 10
     `);
