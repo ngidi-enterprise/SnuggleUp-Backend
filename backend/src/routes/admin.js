@@ -106,11 +106,11 @@ router.post('/products', async (req, res) => {
   }
 });
 
-// Update curated product pricing
+// Update curated product (pricing, SEO fields, status)
 router.put('/products/:id', async (req, res) => {
   try {
     const { id } = req.params;
-    const { custom_price, is_active } = req.body;
+    const { custom_price, is_active, product_name, product_description, category } = req.body;
 
     const updates = [];
     const values = [];
@@ -124,6 +124,21 @@ router.put('/products/:id', async (req, res) => {
     if (is_active !== undefined) {
       updates.push(`is_active = $${paramCount++}`);
       values.push(is_active);
+    }
+
+    if (product_name !== undefined) {
+      updates.push(`product_name = $${paramCount++}`);
+      values.push(product_name);
+    }
+
+    if (product_description !== undefined) {
+      updates.push(`product_description = $${paramCount++}`);
+      values.push(product_description);
+    }
+
+    if (category !== undefined) {
+      updates.push(`category = $${paramCount++}`);
+      values.push(category);
     }
 
     if (updates.length === 0) {
