@@ -85,15 +85,21 @@ router.post('/products', async (req, res) => {
       return res.status(400).json({ error: 'Missing required fields' });
     }
 
+    // Validate price is a valid number
+    const costPrice = Number(cj_cost_price);
+    if (isNaN(costPrice) || costPrice <= 0) {
+      return res.status(400).json({ error: 'Invalid price: must be a positive number' });
+    }
+
     // Calculate suggested price (2x markup)
-    const suggested_price = cj_cost_price * 2;
+    const suggested_price = costPrice * 2;
 
     const result = await pool.query(`
       INSERT INTO curated_products 
       (cj_pid, cj_vid, product_name, product_description, product_image, cj_cost_price, suggested_price, custom_price, category)
       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
       RETURNING *
-    `, [cj_pid, cj_vid, product_name, product_description, product_image, cj_cost_price, suggested_price, suggested_price, category]);
+    `, [cj_pid, cj_vid, product_name, product_description, product_image, costPrice, suggested_price, suggested_price, category]);
 
     res.status(201).json({ product: result.rows[0] });
   } catch (error) {
