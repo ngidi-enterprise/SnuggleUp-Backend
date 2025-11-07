@@ -197,7 +197,7 @@ router.delete('/products/:id', async (req, res) => {
   }
 });
 
-// Search CJ products (for adding to curated list)
+// Search supplier products (for adding to curated list)
 router.get('/cj-products/search', async (req, res) => {
   try {
     const { q, pageNum, pageSize } = req.query;
@@ -208,20 +208,20 @@ router.get('/cj-products/search', async (req, res) => {
     });
     res.json(result);
   } catch (error) {
-    console.error('CJ product search error:', error);
-    res.status(502).json({ error: 'CJ search failed', details: error.message });
+    console.error('Supplier product search error:', error);
+    res.status(502).json({ error: 'Supplier search failed', details: error.message });
   }
 });
 
-// Get CJ product details
+// Get supplier product details
 router.get('/cj-products/:pid', async (req, res) => {
   try {
     const { pid } = req.params;
     const result = await cjClient.getProductDetails(pid);
     res.json(result);
   } catch (error) {
-    console.error('CJ product details error:', error);
-    res.status(502).json({ error: 'CJ product details failed', details: error.message });
+    console.error('Supplier product details error:', error);
+    res.status(502).json({ error: 'Supplier product details failed', details: error.message });
   }
 });
 
