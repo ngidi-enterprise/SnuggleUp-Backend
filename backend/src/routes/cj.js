@@ -1,6 +1,7 @@
 import express from 'express';
 import { authenticateToken } from '../middleware/auth.js';
 import { cjClient } from '../services/cjClient.js';
+import pool from '../db.js';
 
 export const router = express.Router();
 
@@ -126,5 +127,67 @@ router.post('/webhook', express.json({ type: 'application/json' }), async (req, 
   } catch (err) {
     console.error('CJ webhook error:', err);
     res.status(400).json({ error: 'Webhook processing failed', details: err.message });
+  }
+});
+
+// 8. Shipping quote endpoint (real-time CJ freight)
+// POST /api/cj/shipping/quote
+// Body: { items: [{ id: curatedId, quantity }], countryCode: 'ZA', postalCode?: '2196', fromCountryCode?: 'CN' }
+router.post('/shipping/quote', optionalAuth, async (req, res) => {
+  try {
+    const { items, countryCode = 'ZA', postalCode, fromCountryCode = 'CN' } = req.body || {};
+    if (!Array.isArray(items) || items.length === 0) {
+      return res.status(400).json({ error: 'items array is required' });
+    }
+
+    // Load cj_vid (and cj_pid as fallback) for each curated product id
+    const vids = [];
+    for (const it of items) {
+      const curatedId = String(it.id || '').replace('curated-', '');
+      const qty = Math.max(1, Number(it.quantity || 1));
+
+      const result = await pool.query('SELECT cj_vid, cj_pid FROM curated_products WHERE id = $1', [curatedId]);
+      if (result.rows.length === 0) {
+        return res.status(404).json({ error: `Curated product ${curatedId} not found` });
+      }
+      let { cj_vid, cj_pid } = result.rows[0];
+
+      // Fallback: fetch product details and pick first variant if cj_vid is missing
+      if (!cj_vid && cj_pid) {
+        try {
+          const details = await cjClient.getProductDetails(cj_pid);
+          cj_vid = details?.variants?.[0]?.vid;
+        } catch (e) {
+          console.warn('Failed to fetch CJ details for pid', cj_pid, e.message);
+        }
+      }
+
+      if (!cj_vid) {
+        return res.status(400).json({ error: `Missing cj_vid for curated product ${curatedId}` });
+      }
+      vids.push({ vid: cj_vid, quantity: qty });
+    }
+
+    const quotes = await cjClient.getFreightQuote({
+      shippingCountryCode: countryCode,
+      fromCountryCode,
+      postalCode,
+      products: vids,
+    });
+
+    // Convert to ZAR if CJ returns USD (heuristic)
+    const rate = Number(process.env.USD_TO_ZAR || 19.0);
+    const normalized = quotes.map(q => ({
+      logisticName: q.logisticName,
+      costZAR: q.currency && q.currency.toUpperCase() !== 'ZAR' ? Number((q.totalPostage * rate).toFixed(2)) : Number(q.totalPostage.toFixed(2)),
+      currency: q.currency || 'USD',
+      rawCost: Number(q.totalPostage.toFixed(2)),
+      deliveryDay: q.deliveryDay,
+    }));
+
+    res.json({ countryCode, postalCode, fromCountryCode, options: normalized });
+  } catch (err) {
+    console.error('CJ shipping quote error:', err);
+    res.status(502).json({ error: 'CJ shipping quote failed', details: err.message });
   }
 });
