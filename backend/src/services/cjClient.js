@@ -354,6 +354,49 @@ export const cjClient = {
     }));
   },
 
+  // 7. Get freight/shipping quotes (POST /logistic/freightCalculate)
+  // docs vary; we send minimal required fields and let CJ compute postage
+  // payload example:
+  // {
+  //   shippingCountryCode: 'ZA',
+  //   fromCountryCode: 'CN',
+  //   postalCode: '2196', // optional
+  //   products: [{ vid: 'V123', quantity: 2 }]
+  // }
+  async getFreightQuote({ shippingCountryCode, fromCountryCode = 'CN', postalCode, products }) {
+    const accessToken = await getAccessToken();
+    const url = CJ_BASE_URL + '/logistic/freightCalculate';
+
+    if (!shippingCountryCode) throw new Error('shippingCountryCode is required');
+    if (!products || products.length === 0) throw new Error('products array is required');
+
+    const body = {
+      shippingCountryCode,
+      fromCountryCode,
+      products,
+    };
+    if (postalCode) body.postCode = postalCode; // CJ sometimes uses postCode
+
+    const json = await http('POST', url, {
+      body,
+      headers: { 'CJ-Access-Token': accessToken },
+    });
+
+    if (!json.result || !json.data) {
+      throw new Error('CJ getFreightQuote failed: ' + (json.message || 'Unknown error'));
+    }
+
+    // Normalize into a friendly array
+    const list = Array.isArray(json.data) ? json.data : (json.data.list || []);
+    return list.map((m) => ({
+      logisticName: m.logisticName || m.name,
+      totalPostage: Number(m.totalPostage || m.postage || 0),
+      deliveryDay: m.deliveryDay || m.aging || null,
+      currency: m.currency || 'USD',
+      tracking: m.tracking || m.trackingType || undefined,
+    }));
+  },
+
   // Webhook verification
   verifyWebhook(headers, body) {
     if (!CJ_WEBHOOK_SECRET) return true;
