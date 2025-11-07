@@ -110,7 +110,7 @@ router.post('/products', async (req, res) => {
 router.put('/products/:id', async (req, res) => {
   try {
     const { id } = req.params;
-    const { custom_price, is_active, product_name, product_description, category } = req.body;
+    const { custom_price, is_active, product_name, product_description, category, stock_quantity } = req.body;
 
     const updates = [];
     const values = [];
@@ -139,6 +139,11 @@ router.put('/products/:id', async (req, res) => {
     if (category !== undefined) {
       updates.push(`category = $${paramCount++}`);
       values.push(category);
+    }
+
+    if (stock_quantity !== undefined) {
+      updates.push(`stock_quantity = $${paramCount++}`);
+      values.push(stock_quantity);
     }
 
     if (updates.length === 0) {
