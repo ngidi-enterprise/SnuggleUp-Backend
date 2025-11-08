@@ -25,6 +25,9 @@ app.use(cors({
   origin: [
     'http://localhost:5173',
     'http://127.0.0.1:5173',
+    'https://snuggleup.co.za',
+    'https://www.snuggleup.co.za',
+    'https://api.snuggleup.co.za',
     /\.onrender\.com$/,
     /\.webcontainer\.io$/,
     /\.local$/
