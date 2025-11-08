@@ -8,6 +8,8 @@ import { router as cjRouter } from './routes/cj.js';
 import { router as adminRouter } from './routes/admin.js';
 import { router as setupRouter } from './routes/setup.js';
 import { router as productsRouter } from './routes/products.js';
+import { cjClient } from './services/cjClient.js';
+import db from './db.js';
 
 // Load environment variables
 dotenv.config();
@@ -31,6 +33,9 @@ app.use(cors({
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization', 'CJ-Access-Token']
 }));
+// Parse URL-encoded form bodies (required for PayFast IPN)
+app.use(express.urlencoded({ extended: false }));
+// Parse JSON bodies
 app.use(express.json());
 
 // Routes
@@ -40,9 +45,71 @@ app.use('/api/admin', adminRouter);
 app.use('/api/setup', setupRouter);
 app.use('/api/products', productsRouter); // Public curated products
 
-// Health check
+// Health check (legacy)
 app.get('/health', (req, res) => {
   res.json({ status: 'ok' });
+});
+
+// Environment checklist health endpoint
+app.get('/api/health', async (req, res) => {
+  // Basic DB check
+  let dbOk = false;
+  let dbError = null;
+  try {
+    await db.query('SELECT 1');
+    dbOk = true;
+  } catch (e) {
+    dbOk = false;
+    dbError = e.message;
+  }
+
+  const cjStatus = cjClient.getStatus();
+  const payfastMode = process.env.PAYFAST_TEST_MODE === 'true' ? 'sandbox' : 'live';
+
+  const checklist = {
+    service: 'snuggleup-backend',
+    time: new Date().toISOString(),
+    status: 'ok',
+    db: { ok: dbOk, error: dbError },
+    env: {
+      nodeEnv: process.env.NODE_ENV || 'development',
+      backendUrl: process.env.BACKEND_URL || null,
+      frontendUrl: process.env.FRONTEND_URL || null,
+      usdToZarSet: Boolean(process.env.USD_TO_ZAR),
+      corsPatterns: [
+        'http://localhost:5173',
+        'http://127.0.0.1:5173',
+        '/*.onrender.com',
+        '/*.webcontainer.io',
+        '/*.local'
+      ],
+      payfast: {
+        mode: payfastMode,
+        merchantIdSet: Boolean(process.env.PAYFAST_MERCHANT_ID),
+        merchantKeySet: Boolean(process.env.PAYFAST_MERCHANT_KEY),
+        passphraseSet: Boolean(process.env.PAYFAST_PASSPHRASE),
+        notifyUrl: (process.env.BACKEND_URL || '') + '/api/payments/notify'
+      },
+      cj: {
+        baseUrl: cjStatus.baseUrl,
+        hasEmail: cjStatus.hasEmail,
+        hasApiKey: cjStatus.hasApiKey,
+        webhookVerification: cjStatus.webhookVerification,
+        tokenExpiry: cjStatus.tokenExpiry || null
+      }
+    }
+  };
+
+  // Simple readiness flags
+  const ready = {
+    backendUrlSet: Boolean(process.env.BACKEND_URL),
+    frontendUrlSet: Boolean(process.env.FRONTEND_URL),
+    payfastLiveReady: payfastMode === 'live' && Boolean(process.env.PAYFAST_MERCHANT_ID && process.env.PAYFAST_MERCHANT_KEY && process.env.PAYFAST_PASSPHRASE),
+    cjReady: cjStatus.hasEmail && cjStatus.hasApiKey,
+    dbReady: dbOk,
+  };
+
+  res.json({ checklist, ready });
 });
 
 app.listen(port, () => {
