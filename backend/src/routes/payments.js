@@ -1,6 +1,8 @@
 import express from 'express';
 import crypto from 'crypto';
+import fetch from 'node-fetch';
 import { authenticateToken } from '../middleware/auth.js';
+import { updateOrderStatus } from './orders.js';
 
 export const router = express.Router();
 
@@ -46,7 +48,7 @@ router.post('/create', optionalAuth, async (req, res) => {
     }
 
   // Generate signature according to PayFast specs
-  const passphrase = 'saltsaltsalt'; // Updated passphrase as requested
+  const passphrase = process.env.PAYFAST_PASSPHRASE || ''; // Optional but recommended
   const signature = generateSignature(data, passphrase);
     data.signature = signature;
 
@@ -111,14 +113,73 @@ router.get('/cancel', (req, res) => {
 // Handle PayFast notification
 router.post('/notify', async (req, res) => {
   try {
-    const { payment_status, m_payment_id, pf_payment_id, signature } = req.body;
-    
-    // Verify PayFast signature
-    // Update order status
-    // Send confirmation email
-    
-    res.status(200).send('OK');
+    // PayFast posts form-encoded fields
+    const params = { ...req.body };
+    const receivedSignature = params.signature;
+    delete params.signature; // Exclude from signing
+
+    // 1. Recreate signature locally
+    const passphrase = process.env.PAYFAST_PASSPHRASE || '';
+    const localSig = generateSignature(params, passphrase);
+    const signaturesMatch = localSig === receivedSignature;
+
+    // 2. Validate source IP (best-effort; optional)
+    const allowedHosts = [
+      'www.payfast.co.za',
+      'sandbox.payfast.co.za'
+    ];
+
+    // 3. Server-to-server validation: echo params back to PayFast validation endpoint
+    // Skip if in test mode sandbox mismatch is acceptable
+    let validationResult = 'skipped';
+    let validationOk = false;
+    const validationUrl = process.env.PAYFAST_TEST_MODE === 'true'
+      ? 'https://sandbox.payfast.co.za/eng/query/validate'
+      : 'https://www.payfast.co.za/eng/query/validate';
+    try {
+      const formBody = Object.entries(params)
+        .map(([k, v]) => `${encodeURIComponent(k)}=${encodeURIComponent(v)}`)
+        .join('&');
+      const vRes = await fetch(validationUrl, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        body: formBody
+      });
+      validationResult = await vRes.text();
+      validationOk = /VALID/i.test(validationResult);
+    } catch (e) {
+      console.warn('PayFast validation error:', e.message);
+    }
+
+    // 4. Process payment status
+    const paymentStatus = params.payment_status;
+    const orderNumber = params.m_payment_id; // we used m_payment_id as orderNumber earlier
+    const payfastPaymentId = params.pf_payment_id;
+
+    // Update order status if signatures & validation pass
+    if (signaturesMatch && validationOk) {
+      if (paymentStatus === 'COMPLETE') {
+        await updateOrderStatus(orderNumber, 'paid', payfastPaymentId);
+      } else if (paymentStatus === 'FAILED') {
+        await updateOrderStatus(orderNumber, 'failed', payfastPaymentId);
+      } else if (paymentStatus === 'PENDING') {
+        await updateOrderStatus(orderNumber, 'pending', payfastPaymentId);
+      }
+    } else {
+      console.warn('⚠️ PayFast IPN rejected:', { signaturesMatch, validationOk, paymentStatus, orderNumber });
+    }
+
+    res.status(200).json({
+      status: 'ok',
+      processed: signaturesMatch && validationOk,
+      paymentStatus,
+      orderNumber,
+      validationResult,
+      signaturesMatch,
+      validationOk
+    });
   } catch (error) {
+    console.error('PayFast notify error:', error);
     res.status(500).json({ error: 'Notification processing failed' });
   }
 });
