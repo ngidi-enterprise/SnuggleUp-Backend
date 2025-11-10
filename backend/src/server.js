@@ -53,6 +53,11 @@ app.get('/health', (req, res) => {
   res.json({ status: 'ok' });
 });
 
+// Super-light ping to distinguish platform 502s from app errors
+app.get('/api/ping', (_req, res) => {
+  res.json({ ok: true, time: new Date().toISOString() });
+});
+
 // Environment checklist health endpoint
 app.get('/api/health', async (req, res) => {
   // Basic DB check
