@@ -5,8 +5,29 @@ import { cjClient } from '../services/cjClient.js';
 
 export const router = express.Router();
 
+// Lightweight request logger to aid production debugging
+router.use((req, _res, next) => {
+  try {
+    const auth = req.headers?.authorization || '';
+    const snippet = auth ? auth.slice(0, 25) + '…' : 'none';
+    console.log(`[admin] ${req.method} ${req.originalUrl} auth:${snippet}`);
+  } catch {}
+  next();
+});
+
 // All admin routes require admin authentication
 router.use(requireAdmin);
+
+// Simple debug endpoint (verifies admin gate & token decoding)
+router.get('/debug', (req, res) => {
+  res.json({
+    ok: true,
+    time: new Date().toISOString(),
+    email: req.user?.email || null,
+    localUserId: req.localUserId || null,
+    supabaseUser: !!req.user?.supabaseUser,
+  });
+});
 
 // ============ ANALYTICS ============
 
