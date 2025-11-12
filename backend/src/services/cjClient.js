@@ -166,7 +166,7 @@ export const cjClient = {
     };
   },
 
-  // 1. Search CJ products (GET /product/list per docs; supports many filters)
+  // 1. Search CJ products (GET /product/listV2 - ES search with broader account access)
   async searchProducts({ productNameEn, pageNum = 1, pageSize = 20, categoryId, minPrice, maxPrice, keyWord } = {}) {
     const normalizeUrl = (u) => {
       if (!u) return '';
@@ -176,15 +176,15 @@ export const cjClient = {
       return s;
     };
     const accessToken = await getAccessToken();
-    const url = CJ_BASE_URL + '/product/list';
+    // Try listV2 (Elasticsearch-based) which has broader access for most accounts
+    const url = CJ_BASE_URL + '/product/listV2';
     const query = {
-      // list: productNameEn filter, pageNum/pageSize; listV2: keyWord
-      productNameEn: keyWord || productNameEn || '',
-      pageNum,
-      pageSize,
+      keyWord: keyWord || productNameEn || '',
+      page: pageNum,
+      size: pageSize,
       categoryId,
-      minPrice,
-      maxPrice,
+      startSellPrice: minPrice,
+      endSellPrice: maxPrice,
     };
     let json = await http('GET', url, {
       query,
@@ -202,26 +202,29 @@ export const cjClient = {
       throw new Error('CJ searchProducts failed: ' + (json.message || json.msg || 'Unknown error'));
     }
 
-    const list = Array.isArray(json.data?.list) ? json.data.list : [];
-    const items = list.map((p) => ({
-      pid: p.pid,
-      name: p.productNameEn,
-      sku: p.productSku,
+    // listV2 returns nested structure: data.content[0].productList
+    const content = Array.isArray(json.data?.content) ? json.data.content : [];
+    const productList = content.length > 0 && Array.isArray(content[0].productList) ? content[0].productList : [];
+    
+    const items = productList.map((p) => ({
+      pid: p.id,
+      name: p.nameEn,
+      sku: p.sku,
       price: p.sellPrice,
-      image: normalizeUrl(p.productImage),
+      image: normalizeUrl(p.bigImage),
       categoryId: p.categoryId,
-      categoryName: p.categoryName,
-      weight: p.productWeight,
-      isFreeShipping: p.isFreeShipping ?? (p.addMarkStatus === 1),
+      categoryName: p.threeCategoryName,
+      weight: p.productWeight || 0,
+      isFreeShipping: p.addMarkStatus === 1,
       listedNum: p.listedNum,
     }));
 
     return {
       source: 'cj',
       items,
-      pageNum: Number(json.data.pageNum || pageNum),
+      pageNum: Number(json.data.pageNumber || pageNum),
       pageSize: Number(json.data.pageSize || pageSize),
-      total: Number(json.data.total || items.length),
+      total: Number(json.data.totalRecords || items.length),
     };
   },
 
