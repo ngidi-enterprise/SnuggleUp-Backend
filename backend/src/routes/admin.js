@@ -29,6 +29,26 @@ router.get('/debug', (req, res) => {
   });
 });
 
+// Get fresh CJ access token (for manual setup)
+router.get('/get-cj-token', async (req, res) => {
+  try {
+    const token = await cjClient.getAccessToken(true); // Force fresh token
+    const status = cjClient.getStatus();
+    res.json({
+      success: true,
+      accessToken: token,
+      expiresAt: new Date(status.tokenExpiry).toISOString(),
+      instructions: 'Copy this token and add it to Render backend environment as CJ_ACCESS_TOKEN'
+    });
+  } catch (err) {
+    console.error('Failed to get CJ token:', err);
+    res.status(500).json({
+      success: false,
+      error: err.message
+    });
+  }
+});
+
 // ============ ANALYTICS ============
 
 // Get dashboard analytics
