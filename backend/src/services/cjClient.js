@@ -140,7 +140,7 @@ export const cjClient = {
     };
   },
 
-  // 1. Search CJ products (POST /product/list - CJ API v2.0 uses POST for search)
+  // 1. Search CJ products (GET /product/commonQuery - alternative endpoint for basic accounts)
   async searchProducts({ productNameEn, pageNum = 1, pageSize = 20, categoryId, minPrice, maxPrice } = {}) {
     const normalizeUrl = (u) => {
       if (!u) return '';
@@ -150,8 +150,8 @@ export const cjClient = {
       return s;
     };
     const accessToken = await getAccessToken();
-    const url = CJ_BASE_URL + '/product/list';
-    const body = { 
+    const url = CJ_BASE_URL + '/product/commonQuery';
+    const query = { 
       productNameEn: productNameEn || '',
       pageNum,
       pageSize,
@@ -159,8 +159,8 @@ export const cjClient = {
       minPrice,
       maxPrice,
     };
-    const json = await http('POST', url, {
-      body,
+    const json = await http('GET', url, {
+      query,
       headers: { 'CJ-Access-Token': accessToken },
     });
     
