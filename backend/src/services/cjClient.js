@@ -164,8 +164,11 @@ export const cjClient = {
       headers: { 'CJ-Access-Token': accessToken },
     });
     
+    console.log('CJ searchProducts response:', JSON.stringify(json).substring(0, 500));
+    
     if (!json.result || !json.data) {
-      throw new Error('CJ searchProducts failed: ' + (json.message || 'Unknown error'));
+      console.error('CJ searchProducts full error:', JSON.stringify(json));
+      throw new Error('CJ searchProducts failed: ' + (json.message || json.msg || 'Unknown error'));
     }
 
     const items = (json.data.list || []).map((p) => ({
