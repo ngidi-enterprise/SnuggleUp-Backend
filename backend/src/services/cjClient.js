@@ -140,7 +140,7 @@ export const cjClient = {
     };
   },
 
-  // 1. Search CJ products (GET /product/list)
+  // 1. Search CJ products (GET /product/search)
   async searchProducts({ productNameEn, pageNum = 1, pageSize = 20, categoryId, minPrice, maxPrice } = {}) {
     const normalizeUrl = (u) => {
       if (!u) return '';
@@ -150,7 +150,7 @@ export const cjClient = {
       return s;
     };
     const accessToken = await getAccessToken();
-    const url = CJ_BASE_URL + '/product/list';
+    const url = CJ_BASE_URL + '/product/search';
     const query = { 
       productNameEn: productNameEn || '',
       pageNum,
