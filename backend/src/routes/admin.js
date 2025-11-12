@@ -29,10 +29,10 @@ router.get('/debug', (req, res) => {
   });
 });
 
-// Get fresh CJ access token (for manual setup)
+// Get CJ access token (shows currently cached/valid token; will refresh if needed)
 router.get('/get-cj-token', async (req, res) => {
   try {
-    const token = await cjClient.getAccessToken(true); // Force fresh token
+    const token = await cjClient.getAccessToken(false); // Respect 5-min limit
     const status = cjClient.getStatus();
     res.json({
       success: true,
