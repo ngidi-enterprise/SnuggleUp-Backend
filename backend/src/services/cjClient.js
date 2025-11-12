@@ -1,411 +1,374 @@
-import crypto from 'crypto';
+import express from 'express';
+import { requireAdmin } from '../middleware/admin.js';
+import pool from '../db.js';
+import { cjClient } from '../services/cjClient.js';
 
-// CJ Dropshipping API client (lightweight, pluggable for your credentials)
-// This implementation supports two modes:
-// 1) Token mode: Provide CJ_ACCESS_TOKEN (recommended quick start)
-// 2) App mode (scaffold): Provide CJ_APP_KEY/CJ_APP_SECRET and implement token/sign per CJ docs
+export const router = express.Router();
 
-
-const CJ_BASE_URL = process.env.CJ_BASE_URL || 'https://developers.cjdropshipping.com/api2.0/v1';
-const CJ_EMAIL = process.env.CJ_EMAIL || '';
-const CJ_API_KEY = process.env.CJ_API_KEY || '';
-const CJ_WEBHOOK_SECRET = process.env.CJ_WEBHOOK_SECRET || '';
-const CJ_ACCESS_TOKEN = process.env.CJ_ACCESS_TOKEN || ''; // Optional: pre-set token to avoid rate limits
-
-let cjTokenCache = {
-  accessToken: CJ_ACCESS_TOKEN, // Start with env token if provided
-  refreshToken: '',
-  accessTokenExpiry: CJ_ACCESS_TOKEN ? Date.now() + (15 * 24 * 60 * 60 * 1000) : 0, // 15 days if pre-set
-  refreshTokenExpiry: 0,
-};
-
-// CJ has a strict QPS limit (often 1 request/second). We'll throttle and retry.
-let lastCJCallAt = 0;
-const CJ_MIN_INTERVAL_MS = 1100; // a bit over 1s for safety
-
-async function sleep(ms) { return new Promise((r) => setTimeout(r, ms)); }
-
-async function ensureThrottle() {
-  const now = Date.now();
-  const diff = now - lastCJCallAt;
-  if (diff < CJ_MIN_INTERVAL_MS) {
-    await sleep(CJ_MIN_INTERVAL_MS - diff);
-  }
-  lastCJCallAt = Date.now();
-}
-
-
-// Helper: simple fetch wrapper (uses global fetch in Node >=18)
-async function http(method, url, { query, body, headers } = {}) {
-  let fullUrl = url;
-  if (query) {
-    const params = new URLSearchParams();
-    Object.entries(query).forEach(([k, v]) => {
-      if (v !== undefined && v !== null && v !== '') params.set(k, String(v));
-    });
-    fullUrl += '?' + params.toString();
-  }
-
-  // Up to 3 attempts with backoff on 429 Too Many Requests
-  const maxAttempts = 3;
-  let attempt = 0;
-  while (true) {
-    attempt += 1;
-    await ensureThrottle();
-    const res = await fetch(fullUrl, {
-      method,
-      headers: {
-        'Content-Type': 'application/json',
-        ...(headers || {}),
-      },
-      body: body ? JSON.stringify(body) : undefined,
-    });
-
-    const text = await res.text();
-    let json;
-    try { json = text ? JSON.parse(text) : {}; } catch { json = { raw: text }; }
-
-    if (res.ok) return json;
-
-    const err = new Error(`CJ HTTP ${res.status}`);
-    err.status = res.status;
-    err.response = json;
-
-    // CJ rate limit: sometimes returns 429 with code/message in body
-    const isRateLimited = res.status === 429 || json?.code === 1600200 || /Too Many Requests|QPS limit/i.test(json?.message || '');
-    if (isRateLimited && attempt < maxAttempts) {
-      // wait a bit longer each retry
-      await sleep(CJ_MIN_INTERVAL_MS * attempt);
-      continue;
-    }
-    throw err;
-  }
-}
-
-// Get and cache CJ access token
-async function getAccessToken(force = false) {
-  const now = Date.now();
-  // Use cached token if valid (check with 10 minute buffer instead of 1 minute)
-  if (!force && cjTokenCache.accessToken && cjTokenCache.accessTokenExpiry > now + 600000) {
-    console.log('✅ Using cached CJ access token');
-    return cjTokenCache.accessToken;
-  }
-  if (!CJ_EMAIL || !CJ_API_KEY) {
-    throw new Error('CJ_EMAIL and CJ_API_KEY must be set in environment');
-  }
-  
-  console.log('🔄 Requesting new CJ access token...');
-  const url = 'https://developers.cjdropshipping.com/api2.0/v1/authentication/getAccessToken';
-  
+// Lightweight request logger to aid production debugging
+router.use((req, _res, next) => {
   try {
-    const resp = await http('POST', url, {
-      body: {
-        email: CJ_EMAIL,
-        apiKey: CJ_API_KEY,
-      },
+    const auth = req.headers?.authorization || '';
+    const snippet = auth ? auth.slice(0, 25) + '…' : 'none';
+    console.log(`[admin] ${req.method} ${req.originalUrl} auth:${snippet}`);
+  } catch {}
+  next();
+});
+
+// All admin routes require admin authentication
+router.use(requireAdmin);
+
+// Simple debug endpoint (verifies admin gate & token decoding)
+router.get('/debug', (req, res) => {
+  res.json({
+    ok: true,
+    time: new Date().toISOString(),
+    email: req.user?.email || null,
+    localUserId: req.localUserId || null,
+    supabaseUser: !!req.user?.supabaseUser,
+  });
+});
+
+// Get CJ access token (shows currently cached/valid token; will refresh if needed)
+router.get('/get-cj-token', async (req, res) => {
+  try {
+    const token = await cjClient.getAccessToken(false); // Respect 5-min limit
+    const status = cjClient.getStatus();
+    res.json({
+      success: true,
+      accessToken: token,
+      expiresAt: new Date(status.tokenExpiry).toISOString(),
+      instructions: 'Copy this token and add it to Render backend environment as CJ_ACCESS_TOKEN'
     });
-    if (!resp.result || !resp.data?.accessToken) {
-      throw new Error('CJ getAccessToken failed: ' + (resp.message || 'Unknown error'));
-    }
-    cjTokenCache.accessToken = resp.data.accessToken;
-    cjTokenCache.refreshToken = resp.data.refreshToken;
-    cjTokenCache.accessTokenExpiry = new Date(resp.data.accessTokenExpiryDate).getTime();
-    cjTokenCache.refreshTokenExpiry = new Date(resp.data.refreshTokenExpiryDate).getTime();
-    console.log('✅ CJ access token obtained, expires:', new Date(cjTokenCache.accessTokenExpiry).toISOString());
-    return cjTokenCache.accessToken;
   } catch (err) {
-    // If we hit rate limit but have an old token, use it anyway
-    if (err.status === 429 && cjTokenCache.accessToken) {
-      console.warn('⚠️ CJ token rate limit hit, using cached token (may be expired)');
-      return cjTokenCache.accessToken;
-    }
-    throw err;
+    console.error('Failed to get CJ token:', err);
+    res.status(500).json({
+      success: false,
+      error: err.message
+    });
   }
-}
+});
 
+// ============ ANALYTICS ============
 
-// Placeholder signing (for webhook verification)
-function hmacSHA256(content, secret) {
-  return crypto.createHmac('sha256', secret).update(content).digest('hex');
-}
+// Get dashboard analytics
+router.get('/analytics', async (req, res) => {
+  try {
+    // Total orders and revenue
+    const ordersResult = await pool.query(`
+      SELECT 
+        COUNT(*) as total_orders,
+        SUM(total) as total_revenue,
+        SUM(CASE WHEN status = 'completed' THEN 1 ELSE 0 END) as completed_orders,
+        SUM(CASE WHEN status = 'pending' THEN 1 ELSE 0 END) as pending_orders
+      FROM orders
+    `);
 
-export const cjClient = {
-  getStatus() {
-    return {
-      baseUrl: CJ_BASE_URL,
-      hasEmail: Boolean(CJ_EMAIL),
-      hasApiKey: Boolean(CJ_API_KEY),
-      webhookVerification: Boolean(CJ_WEBHOOK_SECRET),
-      tokenExpiry: cjTokenCache.accessTokenExpiry,
-    };
-  },
+    // Orders by day (last 30 days)
+    const dailyOrdersResult = await pool.query(`
+      SELECT 
+        DATE(created_at) as date,
+        COUNT(*) as order_count,
+        SUM(total) as revenue
+      FROM orders
+      WHERE created_at >= NOW() - INTERVAL '30 days'
+      GROUP BY DATE(created_at)
+      ORDER BY date DESC
+    `);
 
-  // 1. Search CJ products (GET /product/commonQuery - alternative endpoint for basic accounts)
-  async searchProducts({ productNameEn, pageNum = 1, pageSize = 20, categoryId, minPrice, maxPrice } = {}) {
-    const normalizeUrl = (u) => {
-      if (!u) return '';
-      let s = String(u).trim();
-      if (s.startsWith('//')) s = 'https:' + s;
-      if (s.startsWith('http://')) s = s.replace(/^http:/, 'https:');
-      return s;
-    };
-    const accessToken = await getAccessToken();
-    const url = CJ_BASE_URL + '/product/commonQuery';
-    const query = { 
-      productNameEn: productNameEn || '',
-      pageNum,
-      pageSize,
-      categoryId,
-      minPrice,
-      maxPrice,
-    };
-    const json = await http('GET', url, {
-      query,
-      headers: { 'CJ-Access-Token': accessToken },
+    // Top selling products (from order items)
+    const topProductsResult = await pool.query(`
+      SELECT 
+        item->>'name' as product_name,
+        item->>'id' as product_id,
+        COUNT(*) as times_ordered,
+        SUM((item->>'price')::numeric * (item->>'quantity')::numeric) as total_revenue
+      FROM orders, jsonb_array_elements(items::jsonb) as item
+      WHERE status = 'completed'
+      GROUP BY item->>'name', item->>'id'
+      ORDER BY times_ordered DESC
+      LIMIT 10
+    `);
+
+    res.json({
+      summary: ordersResult.rows[0],
+      dailyOrders: dailyOrdersResult.rows,
+      topProducts: topProductsResult.rows,
     });
-    
-    console.log('CJ searchProducts response:', JSON.stringify(json).substring(0, 500));
-    
-    if (!json.result || !json.data) {
-      console.error('CJ searchProducts full error:', JSON.stringify(json));
-      throw new Error('CJ searchProducts failed: ' + (json.message || json.msg || 'Unknown error'));
-    }
-
-    const items = (json.data.list || []).map((p) => ({
-      pid: p.pid,
-      name: p.productNameEn,
-      sku: p.productSku,
-      price: p.sellPrice,
-      image: normalizeUrl(p.productImage),
-      categoryId: p.categoryId,
-      categoryName: p.categoryName,
-      weight: p.productWeight,
-      isFreeShipping: p.isFreeShipping,
-      listedNum: p.listedNum,
-    }));
-
-    return {
-      source: 'cj',
-      items,
-      pageNum: json.data.pageNum,
-      pageSize: json.data.pageSize,
-      total: json.data.total,
-    };
-  },
-
-  // 2. Get product details with variants (GET /product/query)
-  async getProductDetails(pid) {
-    const normalizeUrl = (u) => {
-      if (!u) return '';
-      let s = String(u).trim();
-      if (s.startsWith('//')) s = 'https:' + s;
-      if (s.startsWith('http://')) s = s.replace(/^http:/, 'https:');
-      return s;
-    };
-    const accessToken = await getAccessToken();
-    const url = CJ_BASE_URL + '/product/query';
-    const query = { pid };
-    const json = await http('GET', url, {
-      query,
-      headers: { 'CJ-Access-Token': accessToken },
-    });
-
-    if (!json.result || !json.data) {
-      throw new Error('CJ getProductDetails failed: ' + (json.message || 'Unknown error'));
-    }
-
-    const product = json.data;
-    return {
-      pid: product.pid,
-      name: product.productNameEn,
-      sku: product.productSku,
-      price: product.sellPrice,
-      image: normalizeUrl(product.productImage),
-      description: product.description,
-      weight: product.productWeight,
-      categoryId: product.categoryId,
-      categoryName: product.categoryName,
-      variants: (product.variants || []).map((v) => ({
-        vid: v.vid,
-        pid: v.pid,
-        name: v.variantNameEn,
-        sku: v.variantSku,
-        price: v.variantSellPrice,
-        image: normalizeUrl(v.variantImage),
-        weight: v.variantWeight,
-        key: v.variantKey,
-      })),
-    };
-  },
-
-  // 3. Check inventory for a variant (GET /product/stock/queryByVid)
-  async getInventory(vid) {
-    const accessToken = await getAccessToken();
-    const url = CJ_BASE_URL + '/product/stock/queryByVid';
-    const query = { vid };
-    const json = await http('GET', url, {
-      query,
-      headers: { 'CJ-Access-Token': accessToken },
-    });
-
-    if (!json.result || !json.data) {
-      throw new Error('CJ getInventory failed: ' + (json.message || 'Unknown error'));
-    }
-
-    return (json.data || []).map((stock) => ({
-      vid: stock.vid,
-      warehouseId: stock.areaId,
-      warehouseName: stock.areaEn,
-      countryCode: stock.countryCode,
-      totalInventory: stock.totalInventoryNum,
-      cjInventory: stock.cjInventoryNum,
-      factoryInventory: stock.factoryInventoryNum,
-    }));
-  },
-
-  // 4. Create order (POST /shopping/order/createOrderV2)
-  async createOrder(orderData) {
-    const accessToken = await getAccessToken();
-    const url = CJ_BASE_URL + '/shopping/order/createOrderV2';
-    
-    // Validate required fields
-    if (!orderData.orderNumber) throw new Error('orderNumber is required');
-    if (!orderData.shippingCountryCode) throw new Error('shippingCountryCode is required');
-    if (!orderData.shippingCustomerName) throw new Error('shippingCustomerName is required');
-    if (!orderData.shippingAddress) throw new Error('shippingAddress is required');
-    if (!orderData.logisticName) throw new Error('logisticName is required');
-    if (!orderData.fromCountryCode) throw new Error('fromCountryCode is required');
-    if (!orderData.products || orderData.products.length === 0) {
-      throw new Error('products array is required');
-    }
-
-    const json = await http('POST', url, {
-      body: orderData,
-      headers: { 'CJ-Access-Token': accessToken },
-    });
-
-    if (!json.result || !json.data) {
-      throw new Error('CJ createOrder failed: ' + (json.message || 'Unknown error'));
-    }
-
-    return {
-      orderId: json.data.orderId,
-      orderNumber: json.data.orderNumber,
-      shipmentOrderId: json.data.shipmentOrderId,
-      orderAmount: json.data.orderAmount,
-      productAmount: json.data.productAmount,
-      postageAmount: json.data.postageAmount,
-      orderStatus: json.data.orderStatus,
-      productInfoList: json.data.productInfoList,
-    };
-  },
-
-  // 5. Get order status (GET /shopping/order/getOrderDetail)
-  async getOrderStatus(orderId) {
-    const accessToken = await getAccessToken();
-    const url = CJ_BASE_URL + '/shopping/order/getOrderDetail';
-    const query = { orderId };
-    const json = await http('GET', url, {
-      query,
-      headers: { 'CJ-Access-Token': accessToken },
-    });
-
-    if (!json.result || !json.data) {
-      throw new Error('CJ getOrderStatus failed: ' + (json.message || 'Unknown error'));
-    }
-
-    const order = json.data;
-    return {
-      orderId: order.orderId,
-      orderNum: order.orderNum,
-      cjOrderId: order.cjOrderId,
-      orderStatus: order.orderStatus,
-      trackNumber: order.trackNumber,
-      trackingUrl: order.trackingUrl,
-      logisticName: order.logisticName,
-      orderAmount: order.orderAmount,
-      createDate: order.createDate,
-      paymentDate: order.paymentDate,
-      productList: order.productList,
-    };
-  },
-
-  // 6. Get tracking info (GET /logistic/trackInfo)
-  async getTracking(trackNumber) {
-    const accessToken = await getAccessToken();
-    const url = CJ_BASE_URL + '/logistic/trackInfo';
-    const query = { trackNumber };
-    const json = await http('GET', url, {
-      query,
-      headers: { 'CJ-Access-Token': accessToken },
-    });
-
-    if (!json.result || !json.data) {
-      throw new Error('CJ getTracking failed: ' + (json.message || 'Unknown error'));
-    }
-
-    return (json.data || []).map((track) => ({
-      trackingNumber: track.trackingNumber,
-      logisticName: track.logisticName,
-      trackingFrom: track.trackingFrom,
-      trackingTo: track.trackingTo,
-      deliveryDay: track.deliveryDay,
-      deliveryTime: track.deliveryTime,
-      trackingStatus: track.trackingStatus,
-      lastMileCarrier: track.lastMileCarrier,
-      lastTrackNumber: track.lastTrackNumber,
-    }));
-  },
-
-  // 7. Get freight/shipping quotes (POST /logistic/freightCalculate)
-  // docs vary; we send minimal required fields and let CJ compute postage
-  // payload example:
-  // {
-  //   shippingCountryCode: 'ZA',
-  //   fromCountryCode: 'CN',
-  //   postalCode: '2196', // optional
-  //   products: [{ vid: 'V123', quantity: 2 }]
-  // }
-  async getFreightQuote({ shippingCountryCode, fromCountryCode = 'CN', postalCode, products }) {
-    const accessToken = await getAccessToken();
-    const url = CJ_BASE_URL + '/logistic/freightCalculate';
-
-    if (!shippingCountryCode) throw new Error('shippingCountryCode is required');
-    if (!products || products.length === 0) throw new Error('products array is required');
-
-    const body = {
-      shippingCountryCode,
-      fromCountryCode,
-      products,
-    };
-    if (postalCode) body.postCode = postalCode; // CJ sometimes uses postCode
-
-    const json = await http('POST', url, {
-      body,
-      headers: { 'CJ-Access-Token': accessToken },
-    });
-
-    if (!json.result || !json.data) {
-      throw new Error('CJ getFreightQuote failed: ' + (json.message || 'Unknown error'));
-    }
-
-    // Normalize into a friendly array
-    const list = Array.isArray(json.data) ? json.data : (json.data.list || []);
-    return list.map((m) => ({
-      logisticName: m.logisticName || m.name,
-      totalPostage: Number(m.totalPostage || m.postage || 0),
-      deliveryDay: m.deliveryDay || m.aging || null,
-      currency: m.currency || 'USD',
-      tracking: m.tracking || m.trackingType || undefined,
-    }));
-  },
-
-  // Webhook verification
-  verifyWebhook(headers, body) {
-    if (!CJ_WEBHOOK_SECRET) return true;
-    const payload = typeof body === 'string' ? body : JSON.stringify(body);
-    const expected = hmacSHA256(payload + (headers.timestamp || headers['x-cj-timestamp'] || ''), CJ_WEBHOOK_SECRET);
-    const provided = (headers.signature || headers['x-cj-signature'] || '').toString();
-    return expected === provided;
+  } catch (error) {
+    console.error('Analytics error:', error);
+    res.status(500).json({ error: 'Failed to fetch analytics' });
   }
-};
+});
+
+// ============ PRODUCT CURATION ============
+
+// Get all curated products
+router.get('/products', async (req, res) => {
+  try {
+    const result = await pool.query(`
+      SELECT * FROM curated_products 
+      ORDER BY created_at DESC
+    `);
+    res.json({ products: result.rows });
+  } catch (error) {
+    console.error('Get curated products error:', error);
+    res.status(500).json({ error: 'Failed to fetch products' });
+  }
+});
+
+// Add product to curated list
+router.post('/products', async (req, res) => {
+  try {
+    const { cj_pid, cj_vid, product_name, product_description, product_image, cj_cost_price, category } = req.body;
+
+    if (!cj_pid || !product_name || !cj_cost_price) {
+      return res.status(400).json({ error: 'Missing required fields' });
+    }
+
+    // Validate price is a valid number
+    const costPrice = Number(cj_cost_price);
+    if (isNaN(costPrice) || costPrice <= 0) {
+      return res.status(400).json({ error: 'Invalid price: must be a positive number' });
+    }
+
+    // Calculate suggested price (2x markup)
+    const suggested_price = costPrice * 2;
+
+    const result = await pool.query(`
+      INSERT INTO curated_products 
+      (cj_pid, cj_vid, product_name, product_description, product_image, cj_cost_price, suggested_price, custom_price, category)
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+      RETURNING *
+    `, [cj_pid, cj_vid, product_name, product_description, product_image, costPrice, suggested_price, suggested_price, category]);
+
+    res.status(201).json({ product: result.rows[0] });
+  } catch (error) {
+    console.error('Add curated product error:', error);
+    if (error.code === '23505') { // Unique violation
+      res.status(409).json({ error: 'Product already curated' });
+    } else {
+      res.status(500).json({ error: 'Failed to add product' });
+    }
+  }
+});
+
+// Update curated product (pricing, SEO fields, status)
+router.put('/products/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { custom_price, is_active, product_name, product_description, category, stock_quantity } = req.body;
+
+    const updates = [];
+    const values = [];
+    let paramCount = 1;
+
+    if (custom_price !== undefined) {
+      updates.push(`custom_price = $${paramCount++}`);
+      values.push(custom_price);
+    }
+
+    if (is_active !== undefined) {
+      updates.push(`is_active = $${paramCount++}`);
+      values.push(is_active);
+    }
+
+    if (product_name !== undefined) {
+      updates.push(`product_name = $${paramCount++}`);
+      values.push(product_name);
+    }
+
+    if (product_description !== undefined) {
+      updates.push(`product_description = $${paramCount++}`);
+      values.push(product_description);
+    }
+
+    if (category !== undefined) {
+      updates.push(`category = $${paramCount++}`);
+      values.push(category);
+    }
+
+    if (stock_quantity !== undefined) {
+      updates.push(`stock_quantity = $${paramCount++}`);
+      values.push(stock_quantity);
+    }
+
+    if (updates.length === 0) {
+      return res.status(400).json({ error: 'No fields to update' });
+    }
+
+    updates.push(`updated_at = NOW()`);
+    values.push(id);
+
+    const result = await pool.query(`
+      UPDATE curated_products 
+      SET ${updates.join(', ')}
+      WHERE id = $${paramCount}
+      RETURNING *
+    `, values);
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: 'Product not found' });
+    }
+
+    res.json({ product: result.rows[0] });
+  } catch (error) {
+    console.error('Update product error:', error);
+    res.status(500).json({ error: 'Failed to update product' });
+  }
+});
+
+// Delete curated product
+router.delete('/products/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    const result = await pool.query(`
+      DELETE FROM curated_products WHERE id = $1 RETURNING *
+    `, [id]);
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: 'Product not found' });
+    }
+
+    res.json({ success: true, product: result.rows[0] });
+  } catch (error) {
+    console.error('Delete product error:', error);
+    res.status(500).json({ error: 'Failed to delete product' });
+  }
+});
+
+// Search supplier products (for adding to curated list)
+router.get('/cj-products/search', async (req, res) => {
+  try {
+    const { q, pageNum, pageSize } = req.query;
+    const result = await cjClient.searchProducts({
+      productNameEn: q,
+      pageNum: pageNum ? Number(pageNum) : 1,
+      pageSize: pageSize ? Number(pageSize) : 20,
+    });
+    res.json(result);
+  } catch (error) {
+    console.error('Supplier product search error:', error);
+    res.status(502).json({ error: 'Supplier search failed', details: error.message });
+  }
+});
+
+// Get supplier product details
+router.get('/cj-products/:pid', async (req, res) => {
+  try {
+    const { pid } = req.params;
+    const result = await cjClient.getProductDetails(pid);
+    res.json(result);
+  } catch (error) {
+    console.error('Supplier product details error:', error);
+    res.status(502).json({ error: 'Supplier product details failed', details: error.message });
+  }
+});
+
+// ============ ORDER MANAGEMENT ============
+
+// Get all orders with filters
+router.get('/orders', async (req, res) => {
+  try {
+    const { status, limit = 50, offset = 0 } = req.query;
+
+    let query = 'SELECT * FROM orders';
+    const values = [];
+    
+    if (status) {
+      query += ' WHERE status = $1';
+      values.push(status);
+    }
+
+    query += ` ORDER BY created_at DESC LIMIT $${values.length + 1} OFFSET $${values.length + 2}`;
+    values.push(Number(limit), Number(offset));
+
+    const result = await pool.query(query, values);
+
+    // Get total count
+    const countResult = await pool.query(
+      status ? 'SELECT COUNT(*) FROM orders WHERE status = $1' : 'SELECT COUNT(*) FROM orders',
+      status ? [status] : []
+    );
+
+    res.json({
+      orders: result.rows,
+      total: Number(countResult.rows[0].count),
+      limit: Number(limit),
+      offset: Number(offset),
+    });
+  } catch (error) {
+    console.error('Get orders error:', error);
+    res.status(500).json({ error: 'Failed to fetch orders' });
+  }
+});
+
+// Update order status
+router.put('/orders/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { status } = req.body;
+
+    if (!['pending', 'completed', 'failed', 'cancelled'].includes(status)) {
+      return res.status(400).json({ error: 'Invalid status' });
+    }
+
+    const result = await pool.query(`
+      UPDATE orders 
+      SET status = $1, updated_at = NOW()
+      WHERE id = $2
+      RETURNING *
+    `, [status, id]);
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: 'Order not found' });
+    }
+
+    res.json({ order: result.rows[0] });
+  } catch (error) {
+    console.error('Update order error:', error);
+    res.status(500).json({ error: 'Failed to update order' });
+  }
+});
+
+// ============ USER MANAGEMENT ============
+
+// Get all users
+router.get('/users', async (req, res) => {
+  try {
+    const result = await pool.query(`
+      SELECT id, email, name, phone, is_admin, created_at 
+      FROM users 
+      ORDER BY created_at DESC
+    `);
+    res.json({ users: result.rows });
+  } catch (error) {
+    console.error('Get users error:', error);
+    res.status(500).json({ error: 'Failed to fetch users' });
+  }
+});
+
+// Toggle admin status
+router.put('/users/:id/admin', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { is_admin } = req.body;
+
+    const result = await pool.query(`
+      UPDATE users 
+      SET is_admin = $1
+      WHERE id = $2
+      RETURNING id, email, name, is_admin
+    `, [is_admin, id]);
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: 'User not found' });
+    }
+
+    res.json({ user: result.rows[0] });
+  } catch (error) {
+    console.error('Update user admin status error:', error);
+    res.status(500).json({ error: 'Failed to update user' });
+  }
+});
