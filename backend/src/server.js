@@ -8,6 +8,7 @@ import { router as cjRouter } from './routes/cj.js';
 import { router as adminRouter } from './routes/admin.js';
 import { router as setupRouter } from './routes/setup.js';
 import { router as productsRouter } from './routes/products.js';
+import { router as cartRouter } from './routes/cart.js';
 import { cjClient } from './services/cjClient.js';
 import db from './db.js';
 
@@ -47,6 +48,7 @@ app.use('/api/cj', cjRouter);
 app.use('/api/admin', adminRouter);
 app.use('/api/setup', setupRouter);
 app.use('/api/products', productsRouter); // Public curated products
+app.use('/api/cart', cartRouter); // Cart persistence
 
 // Health check (legacy)
 app.get('/health', (req, res) => {
