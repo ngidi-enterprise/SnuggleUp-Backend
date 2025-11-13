@@ -127,8 +127,10 @@ async function getAccessToken(force = false) {
   
   try {
     const resp = await http('POST', url, {
-      // Docs show only apiKey is required; email is ignored by server.
-      body: { apiKey: CJ_API_KEY },
+      body: {
+        email: CJ_EMAIL,
+        apiKey: CJ_API_KEY,
+      },
     });
     if (!resp.result || !resp.data?.accessToken) {
       throw new Error('CJ getAccessToken failed: ' + (resp.message || 'Unknown error'));
@@ -166,8 +168,8 @@ export const cjClient = {
     };
   },
 
-  // 1. Search CJ products (GET /product/listV2 - ES search with broader account access)
-  async searchProducts({ productNameEn, pageNum = 1, pageSize = 20, categoryId, minPrice, maxPrice, keyWord } = {}) {
+  // 1. Search CJ products (GET /product/list)
+  async searchProducts({ productNameEn, pageNum = 1, pageSize = 20, categoryId, minPrice, maxPrice } = {}) {
     const normalizeUrl = (u) => {
       if (!u) return '';
       let s = String(u).trim();
@@ -176,55 +178,44 @@ export const cjClient = {
       return s;
     };
     const accessToken = await getAccessToken();
-    // Try listV2 (Elasticsearch-based) which has broader access for most accounts
-    const url = CJ_BASE_URL + '/product/listV2';
-    const query = {
-      keyWord: keyWord || productNameEn || '',
-      page: pageNum,
-      size: pageSize,
+    const url = CJ_BASE_URL + '/product/list';
+    const query = { 
+      productNameEn: productNameEn || '',
+      pageNum,
+      pageSize,
       categoryId,
-      startSellPrice: minPrice,
-      endSellPrice: maxPrice,
+      minPrice,
+      maxPrice,
     };
-    let json = await http('GET', url, {
+    const json = await http('GET', url, {
       query,
       headers: { 'CJ-Access-Token': accessToken },
     });
-
-    // If token expired between checks, attempt a refresh once and retry
-    if ((!json?.result && /Authentication|token|expire/i.test(json?.message || '')) || json?.code === 1600001) {
-      await refreshAccessToken();
-      json = await http('GET', url, { query, headers: { 'CJ-Access-Token': cjTokenCache.accessToken } });
-    }
-
+    
     if (!json.result || !json.data) {
       console.error('CJ searchProducts error:', JSON.stringify(json));
-      throw new Error('CJ searchProducts failed: ' + (json.message || json.msg || 'Unknown error'));
+      throw new Error('CJ searchProducts failed: ' + (json.message || 'Unknown error'));
     }
 
-    // listV2 returns nested structure: data.content[0].productList
-    const content = Array.isArray(json.data?.content) ? json.data.content : [];
-    const productList = content.length > 0 && Array.isArray(content[0].productList) ? content[0].productList : [];
-    
-    const items = productList.map((p) => ({
-      pid: p.id,
-      name: p.nameEn,
-      sku: p.sku,
+    const items = (json.data.list || []).map((p) => ({
+      pid: p.pid,
+      name: p.productNameEn,
+      sku: p.productSku,
       price: p.sellPrice,
-      image: normalizeUrl(p.bigImage),
+      image: normalizeUrl(p.productImage),
       categoryId: p.categoryId,
-      categoryName: p.threeCategoryName,
-      weight: p.productWeight || 0,
-      isFreeShipping: p.addMarkStatus === 1,
+      categoryName: p.categoryName,
+      weight: p.productWeight,
+      isFreeShipping: p.isFreeShipping,
       listedNum: p.listedNum,
     }));
 
     return {
       source: 'cj',
       items,
-      pageNum: Number(json.data.pageNumber || pageNum),
-      pageSize: Number(json.data.pageSize || pageSize),
-      total: Number(json.data.totalRecords || items.length),
+      pageNum: json.data.pageNum,
+      pageSize: json.data.pageSize,
+      total: json.data.total,
     };
   },
 
