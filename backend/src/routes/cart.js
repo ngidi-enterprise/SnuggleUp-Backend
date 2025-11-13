@@ -10,7 +10,12 @@ router.use(authenticateToken);
 // GET /api/cart - Get user's cart
 router.get('/', async (req, res) => {
   try {
-    const userId = req.user.id;
+    const userId = req.user.userId || req.user.id || req.user.sub;
+    
+    if (!userId) {
+      console.error('❌ No userId found in req.user:', req.user);
+      return res.status(400).json({ error: 'User ID not found' });
+    }
     
     const result = await pool.query(
       'SELECT items, updated_at FROM carts WHERE user_id = $1',
@@ -34,8 +39,13 @@ router.get('/', async (req, res) => {
 // POST /api/cart - Save/update user's cart
 router.post('/', async (req, res) => {
   try {
-    const userId = req.user.id;
+    const userId = req.user.userId || req.user.id || req.user.sub;
     const { items } = req.body;
+    
+    if (!userId) {
+      console.error('❌ No userId found in req.user:', req.user);
+      return res.status(400).json({ error: 'User ID not found' });
+    }
 
     if (!Array.isArray(items)) {
       return res.status(400).json({ error: 'Items must be an array' });
@@ -64,7 +74,12 @@ router.post('/', async (req, res) => {
 // DELETE /api/cart - Clear user's cart
 router.delete('/', async (req, res) => {
   try {
-    const userId = req.user.id;
+    const userId = req.user.userId || req.user.id || req.user.sub;
+    
+    if (!userId) {
+      console.error('❌ No userId found in req.user:', req.user);
+      return res.status(400).json({ error: 'User ID not found' });
+    }
     
     await pool.query('DELETE FROM carts WHERE user_id = $1', [userId]);
     
