@@ -186,6 +186,8 @@ export const cjClient = {
       categoryId,
       minPrice,
       maxPrice,
+      // Hint to CJ API: only return products sourced from China
+      fromCountryCode: 'CN',
     };
     const json = await http('GET', url, {
       query,
@@ -220,9 +222,9 @@ export const cjClient = {
         originCountry,
       };
     }).filter(it => {
-      // HARD FILTER: Only return products sourced from China (CN) for Product Curator.
-      // If originCountry is missing we exclude the item to ensure strict CN-only listing.
-      return it.originCountry === 'CN';
+      // Prefer explicit CN; if the field is absent (CJ sometimes omits it),
+      // keep the item because we already requested fromCountryCode=CN upstream.
+      return it.originCountry === 'CN' || it.originCountry === null || it.originCountry === undefined;
     });
 
     return {
@@ -230,10 +232,10 @@ export const cjClient = {
       items,
       pageNum: json.data.pageNum,
       pageSize: json.data.pageSize,
-      // total now reflects filtered results count (China-only)
+      // total reflects results after upstream CN filter and safety filter above
       total: items.length,
       filtered: {
-        applied: 'originCountry === "CN"',
+        applied: 'fromCountryCode=CN (query) + originCountry==CN||missing (post-filter)',
         originalTotal: json.data.total,
         originalReturned: rawList.length
       }
