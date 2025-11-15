@@ -100,6 +100,25 @@ async function initDb() {
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_curated_products_active ON curated_products(is_active);`);
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_curated_products_category ON curated_products(category);`);
 
+  // Detailed per-warehouse inventory snapshots for curated products
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS curated_product_inventories (
+      id SERIAL PRIMARY KEY,
+      curated_product_id INTEGER NOT NULL REFERENCES curated_products(id) ON DELETE CASCADE,
+      cj_pid TEXT,
+      cj_vid TEXT,
+      warehouse_id TEXT,
+      warehouse_name TEXT,
+      country_code TEXT,
+      total_inventory INTEGER,
+      cj_inventory INTEGER,
+      factory_inventory INTEGER,
+      updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    );
+  `);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_curated_inv_curated_product_id ON curated_product_inventories(curated_product_id);`);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_curated_inv_cj_vid ON curated_product_inventories(cj_vid);`);
+
   // Cart persistence table - stores user cart items
   await pool.query(`
     CREATE TABLE IF NOT EXISTS carts (
