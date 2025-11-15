@@ -197,25 +197,46 @@ export const cjClient = {
       throw new Error('CJ searchProducts failed: ' + (json.message || 'Unknown error'));
     }
 
-    const items = (json.data.list || []).map((p) => ({
-      pid: p.pid,
-      name: p.productNameEn,
-      sku: p.productSku,
-      price: p.sellPrice,
-      image: normalizeUrl(p.productImage),
-      categoryId: p.categoryId,
-      categoryName: p.categoryName,
-      weight: p.productWeight,
-      isFreeShipping: p.isFreeShipping,
-      listedNum: p.listedNum,
-    }));
+    const rawList = (json.data.list || []);
+    const items = rawList.map((p) => {
+      // Attempt to derive the origin country from several possible CJ fields.
+      // CJ product list responses may include one of these (field names vary between docs & envs):
+      //  - fromCountryCode
+      //  - countryCode
+      //  - sourceCountryCode
+      // If none are present we set originCountry to null.
+      const originCountry = p.fromCountryCode || p.countryCode || p.sourceCountryCode || null;
+      return {
+        pid: p.pid,
+        name: p.productNameEn,
+        sku: p.productSku,
+        price: p.sellPrice,
+        image: normalizeUrl(p.productImage),
+        categoryId: p.categoryId,
+        categoryName: p.categoryName,
+        weight: p.productWeight,
+        isFreeShipping: p.isFreeShipping,
+        listedNum: p.listedNum,
+        originCountry,
+      };
+    }).filter(it => {
+      // HARD FILTER: Only return products sourced from China (CN) for Product Curator.
+      // If originCountry is missing we exclude the item to ensure strict CN-only listing.
+      return it.originCountry === 'CN';
+    });
 
     return {
       source: 'cj',
       items,
       pageNum: json.data.pageNum,
       pageSize: json.data.pageSize,
-      total: json.data.total,
+      // total now reflects filtered results count (China-only)
+      total: items.length,
+      filtered: {
+        applied: 'originCountry === "CN"',
+        originalTotal: json.data.total,
+        originalReturned: rawList.length
+      }
     };
   },
 
