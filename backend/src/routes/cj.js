@@ -71,6 +71,8 @@ router.get('/inventory/:vid', optionalAuth, async (req, res) => {
 router.get('/inventory/curated', optionalAuth, async (_req, res) => {
   try {
     const snapshot = await getCuratedInventorySnapshot();
+    // Prevent any intermediate cache from serving stale data after sync
+    res.set('Cache-Control', 'no-store');
     res.json({ source: 'curated', products: snapshot });
   } catch (err) {
     console.error('Curated inventory snapshot error:', err);
