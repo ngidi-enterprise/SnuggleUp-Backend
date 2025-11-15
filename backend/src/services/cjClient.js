@@ -20,9 +20,35 @@ let cjTokenCache = {
   refreshTokenExpiry: 0,
 };
 
+// Simple search cache to reduce duplicate API calls (5 minute TTL)
+const searchCache = new Map();
+const SEARCH_CACHE_TTL = 5 * 60 * 1000; // 5 minutes
+
+function getCacheKey(params) {
+  return JSON.stringify(params);
+}
+
+function getFromCache(key) {
+  const cached = searchCache.get(key);
+  if (cached && Date.now() - cached.timestamp < SEARCH_CACHE_TTL) {
+    console.log('📦 Using cached search result');
+    return cached.data;
+  }
+  return null;
+}
+
+function setCache(key, data) {
+  searchCache.set(key, { data, timestamp: Date.now() });
+  // Clean old entries if cache gets too large
+  if (searchCache.size > 100) {
+    const firstKey = searchCache.keys().next().value;
+    searchCache.delete(firstKey);
+  }
+}
+
 // CJ has a strict QPS limit (often 1 request/second). We'll throttle and retry.
 let lastCJCallAt = 0;
-const CJ_MIN_INTERVAL_MS = 1100; // a bit over 1s for safety
+const CJ_MIN_INTERVAL_MS = 1500; // Increased to 1.5s for better safety margin
 
 async function sleep(ms) { return new Promise((r) => setTimeout(r, ms)); }
 
@@ -75,8 +101,10 @@ async function http(method, url, { query, body, headers } = {}) {
     // CJ rate limit: sometimes returns 429 with code/message in body
     const isRateLimited = res.status === 429 || json?.code === 1600200 || /Too Many Requests|QPS limit/i.test(json?.message || '');
     if (isRateLimited && attempt < maxAttempts) {
-      // wait a bit longer each retry
-      await sleep(CJ_MIN_INTERVAL_MS * attempt);
+      // Exponential backoff: wait longer each retry (2s, 4s, 8s)
+      const backoffMs = CJ_MIN_INTERVAL_MS * Math.pow(2, attempt);
+      console.warn(`⏳ CJ rate limit hit, retrying in ${backoffMs}ms (attempt ${attempt}/${maxAttempts})`);
+      await sleep(backoffMs);
       continue;
     }
     throw err;
@@ -170,6 +198,11 @@ export const cjClient = {
 
   // 1. Search CJ products (GET /product/list)
   async searchProducts({ productNameEn, pageNum = 1, pageSize = 20, categoryId, minPrice, maxPrice } = {}) {
+    // Check cache first
+    const cacheKey = getCacheKey({ productNameEn, pageNum, pageSize, categoryId, minPrice, maxPrice });
+    const cached = getFromCache(cacheKey);
+    if (cached) return cached;
+
     const normalizeUrl = (u) => {
       if (!u) return '';
       let s = String(u).trim();
@@ -231,7 +264,7 @@ export const cjClient = {
       return it.originCountry === 'CN' || it.originCountry === null || it.originCountry === undefined;
     });
 
-    return {
+    const result = {
       source: 'cj',
       items,
       pageNum: json.data.pageNum,
@@ -244,6 +277,10 @@ export const cjClient = {
         originalReturned: rawList.length
       }
     };
+    
+    // Cache the result for 5 minutes
+    setCache(cacheKey, result);
+    return result;
   },
 
   // 2. Get product details with variants (GET /product/query)
