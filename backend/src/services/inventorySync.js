@@ -11,86 +11,123 @@ import pool from '../db.js';
  *  - Upsert detailed warehouse rows into curated_product_inventories (one row per warehouse)
  *  - Skip products with no cj_vid even after detail lookup
  *  - Return summary with counts and failures
+ *  - Log sync run to inventory_sync_history table
  */
-export async function syncCuratedInventory({ limit } = {}) {
+export async function syncCuratedInventory({ limit, syncType = 'scheduled' } = {}) {
+  const startTime = new Date();
   const failures = [];
   const updated = [];
   const details = [];
 
-  // Optional LIMIT to reduce API usage
-  const limitClause = limit ? 'WHERE is_active = TRUE ORDER BY updated_at ASC LIMIT $1' : 'WHERE is_active = TRUE';
-  const productsRes = limit
-    ? await pool.query(`SELECT id, cj_pid, cj_vid FROM curated_products ${limitClause}`, [limit])
-    : await pool.query(`SELECT id, cj_pid, cj_vid FROM curated_products ${limitClause}`);
+  // Create sync history record
+  const historyResult = await pool.query(
+    `INSERT INTO inventory_sync_history (started_at, status, sync_type) 
+     VALUES ($1, 'running', $2) RETURNING id`,
+    [startTime, syncType]
+  );
+  const syncHistoryId = historyResult.rows[0].id;
 
-  for (const row of productsRes.rows) {
-    const { id, cj_pid } = row;
-    let { cj_vid } = row;
+  try {
+    // Optional LIMIT to reduce API usage
+    const limitClause = limit ? 'WHERE is_active = TRUE ORDER BY updated_at ASC LIMIT $1' : 'WHERE is_active = TRUE';
+    const productsRes = limit
+      ? await pool.query(`SELECT id, cj_pid, cj_vid FROM curated_products ${limitClause}`, [limit])
+      : await pool.query(`SELECT id, cj_pid, cj_vid FROM curated_products ${limitClause}`);
 
-    try {
-      // Attempt to derive cj_vid if missing by fetching product details
-      if (!cj_vid && cj_pid) {
-        try {
-          const productDetails = await cjClient.getProductDetails(cj_pid);
-          cj_vid = productDetails?.variants?.[0]?.vid || null;
-          if (cj_vid) {
-            await pool.query('UPDATE curated_products SET cj_vid = $1, updated_at = NOW() WHERE id = $2', [cj_vid, id]);
+    for (const row of productsRes.rows) {
+      const { id, cj_pid } = row;
+      let { cj_vid } = row;
+
+      try {
+        // Attempt to derive cj_vid if missing by fetching product details
+        if (!cj_vid && cj_pid) {
+          try {
+            const productDetails = await cjClient.getProductDetails(cj_pid);
+            cj_vid = productDetails?.variants?.[0]?.vid || null;
+            if (cj_vid) {
+              await pool.query('UPDATE curated_products SET cj_vid = $1, updated_at = NOW() WHERE id = $2', [cj_vid, id]);
+            }
+          } catch (e) {
+            // Soft failure; we'll skip if still missing
+            console.warn(`Failed to fetch details for pid ${cj_pid}:`, e.message);
           }
-        } catch (e) {
-          // Soft failure; we'll skip if still missing
-          console.warn(`Failed to fetch details for pid ${cj_pid}:`, e.message);
         }
+
+        if (!cj_vid) {
+          failures.push({ id, cj_pid, reason: 'Missing cj_vid' });
+          continue;
+        }
+
+        // Fetch inventory per variant
+        const inventory = await cjClient.getInventory(cj_vid);
+        const total = inventory.reduce((sum, w) => sum + (Number(w.totalInventory) || 0), 0);
+
+        // Update curated_products stock_quantity
+        await pool.query('UPDATE curated_products SET stock_quantity = $1, updated_at = NOW() WHERE id = $2', [total, id]);
+
+        // Upsert warehouse rows; simplest strategy: delete old rows then insert
+        await pool.query('DELETE FROM curated_product_inventories WHERE curated_product_id = $1', [id]);
+        for (const w of inventory) {
+          await pool.query(
+            `INSERT INTO curated_product_inventories (
+               curated_product_id, cj_pid, cj_vid, warehouse_id, warehouse_name, country_code, total_inventory, cj_inventory, factory_inventory, updated_at
+             ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,NOW())`,
+            [
+              id,
+              cj_pid,
+              cj_vid,
+              w.warehouseId,
+              w.warehouseName,
+              w.countryCode,
+              w.totalInventory,
+              w.cjInventory,
+              w.factoryInventory
+            ]
+          );
+        }
+
+        updated.push({ id, cj_pid, cj_vid, total, warehouses: inventory.length });
+        details.push({ id, cj_pid, cj_vid, inventory });
+      } catch (err) {
+        console.error('Inventory sync error for product', id, cj_pid, err.message);
+        failures.push({ id, cj_pid, cj_vid, reason: err.message });
       }
-
-      if (!cj_vid) {
-        failures.push({ id, cj_pid, reason: 'Missing cj_vid' });
-        continue;
-      }
-
-      // Fetch inventory per variant
-      const inventory = await cjClient.getInventory(cj_vid);
-      const total = inventory.reduce((sum, w) => sum + (Number(w.totalInventory) || 0), 0);
-
-      // Update curated_products stock_quantity
-      await pool.query('UPDATE curated_products SET stock_quantity = $1, updated_at = NOW() WHERE id = $2', [total, id]);
-
-      // Upsert warehouse rows; simplest strategy: delete old rows then insert
-      await pool.query('DELETE FROM curated_product_inventories WHERE curated_product_id = $1', [id]);
-      for (const w of inventory) {
-        await pool.query(
-          `INSERT INTO curated_product_inventories (
-             curated_product_id, cj_pid, cj_vid, warehouse_id, warehouse_name, country_code, total_inventory, cj_inventory, factory_inventory, updated_at
-           ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,NOW())`,
-          [
-            id,
-            cj_pid,
-            cj_vid,
-            w.warehouseId,
-            w.warehouseName,
-            w.countryCode,
-            w.totalInventory,
-            w.cjInventory,
-            w.factoryInventory
-          ]
-        );
-      }
-
-      updated.push({ id, cj_pid, cj_vid, total, warehouses: inventory.length });
-      details.push({ id, cj_pid, cj_vid, inventory });
-    } catch (err) {
-      console.error('Inventory sync error for product', id, cj_pid, err.message);
-      failures.push({ id, cj_pid, cj_vid, reason: err.message });
     }
-  }
 
-  return {
-    ok: true,
-    processed: productsRes.rows.length,
-    updated: updated.length,
-    failures: failures.length,
-    updatedProducts: updated,
-    failuresList: failures,
-  };
+    // Update sync history with success
+    await pool.query(
+      `UPDATE inventory_sync_history 
+       SET completed_at = NOW(), 
+           products_updated = $1, 
+           products_failed = $2, 
+           status = 'completed'
+       WHERE id = $3`,
+      [updated.length, failures.length, syncHistoryId]
+    );
+
+    return {
+      ok: true,
+      processed: productsRes.rows.length,
+      updated: updated.length,
+      failures: failures.length,
+      updatedProducts: updated,
+      failuresList: failures,
+      syncHistoryId,
+    };
+  } catch (err) {
+    // Update sync history with error
+    await pool.query(
+      `UPDATE inventory_sync_history 
+       SET completed_at = NOW(), 
+           products_failed = $1, 
+           status = 'failed',
+           error_message = $2
+       WHERE id = $3`,
+      [failures.length, err.message, syncHistoryId]
+    );
+    
+    throw err;
+  }
 }
 
 /**
