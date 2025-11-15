@@ -55,18 +55,8 @@ router.get('/products/:pid', optionalAuth, async (req, res) => {
 
 // 3. Check inventory for a variant
 // GET /api/cj/inventory/:vid
-router.get('/inventory/:vid', optionalAuth, async (req, res) => {
-  try {
-    const { vid } = req.params;
-    const result = await cjClient.getInventory(vid);
-    res.json({ vid, inventory: result });
-  } catch (err) {
-    console.error('CJ inventory check error:', err);
-    res.status(502).json({ error: 'CJ inventory check failed', details: err.message });
-  }
-});
-
 // 3b. Curated products inventory snapshot (aggregated + per warehouse)
+// NOTE: Place BEFORE /inventory/:vid to prevent Express from capturing "curated" as :vid
 // GET /api/cj/inventory/curated
 router.get('/inventory/curated', optionalAuth, async (_req, res) => {
   try {
@@ -90,6 +80,20 @@ router.post('/inventory/sync', requireAdmin, async (req, res) => {
   } catch (err) {
     console.error('Curated inventory sync error:', err);
     res.status(500).json({ error: 'Inventory sync failed', details: err.message });
+  }
+});
+
+// 3. Check inventory for a variant
+// Keep AFTER the curated/sync routes so dynamic param does not match them
+// GET /api/cj/inventory/:vid
+router.get('/inventory/:vid', optionalAuth, async (req, res) => {
+  try {
+    const { vid } = req.params;
+    const result = await cjClient.getInventory(vid);
+    res.json({ vid, inventory: result });
+  } catch (err) {
+    console.error('CJ inventory check error:', err);
+    res.status(502).json({ error: 'CJ inventory check failed', details: err.message });
   }
 });
 
