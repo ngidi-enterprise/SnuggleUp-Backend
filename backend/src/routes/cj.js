@@ -1,6 +1,8 @@
 import express from 'express';
 import { authenticateToken } from '../middleware/auth.js';
 import { cjClient } from '../services/cjClient.js';
+import { requireAdmin } from '../middleware/admin.js';
+import { syncCuratedInventory, getCuratedInventorySnapshot } from '../services/inventorySync.js';
 import pool from '../db.js';
 
 export const router = express.Router();
@@ -61,6 +63,31 @@ router.get('/inventory/:vid', optionalAuth, async (req, res) => {
   } catch (err) {
     console.error('CJ inventory check error:', err);
     res.status(502).json({ error: 'CJ inventory check failed', details: err.message });
+  }
+});
+
+// 3b. Curated products inventory snapshot (aggregated + per warehouse)
+// GET /api/cj/inventory/curated
+router.get('/inventory/curated', optionalAuth, async (_req, res) => {
+  try {
+    const snapshot = await getCuratedInventorySnapshot();
+    res.json({ source: 'curated', products: snapshot });
+  } catch (err) {
+    console.error('Curated inventory snapshot error:', err);
+    res.status(500).json({ error: 'Failed to load curated inventory', details: err.message });
+  }
+});
+
+// 3c. Manual sync of curated product inventory (admin only)
+// POST /api/cj/inventory/sync { limit?: number }
+router.post('/inventory/sync', requireAdmin, async (req, res) => {
+  try {
+    const { limit } = req.body || {};
+    const result = await syncCuratedInventory({ limit: limit ? Number(limit) : undefined });
+    res.json(result);
+  } catch (err) {
+    console.error('Curated inventory sync error:', err);
+    res.status(500).json({ error: 'Inventory sync failed', details: err.message });
   }
 });
 
