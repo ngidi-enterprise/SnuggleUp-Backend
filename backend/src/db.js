@@ -119,6 +119,23 @@ async function initDb() {
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_curated_inv_curated_product_id ON curated_product_inventories(curated_product_id);`);
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_curated_inv_cj_vid ON curated_product_inventories(cj_vid);`);
 
+  // Inventory sync history - tracks each sync run with metadata
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS inventory_sync_history (
+      id SERIAL PRIMARY KEY,
+      started_at TIMESTAMP NOT NULL,
+      completed_at TIMESTAMP,
+      products_updated INTEGER DEFAULT 0,
+      products_failed INTEGER DEFAULT 0,
+      status TEXT DEFAULT 'running',
+      error_message TEXT,
+      sync_type TEXT DEFAULT 'scheduled',
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    );
+  `);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_sync_history_started_at ON inventory_sync_history(started_at DESC);`);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_sync_history_status ON inventory_sync_history(status);`);
+
   // Cart persistence table - stores user cart items
   await pool.query(`
     CREATE TABLE IF NOT EXISTS carts (
