@@ -154,11 +154,43 @@ router.post('/products', async (req, res) => {
         const inventory = await cjClient.getInventory(resolvedVid);
         stockQuantity = inventory.reduce((sum, w) => sum + (Number(w.totalInventory) || 0), 0);
         console.log(`📦 Fetched initial stock for ${cj_pid}: ${stockQuantity}`);
+        
+        // Insert product first to get the ID
+        const result = await pool.query(`
+          INSERT INTO curated_products 
+          (cj_pid, cj_vid, product_name, product_description, product_image, cj_cost_price, suggested_price, custom_price, category, stock_quantity)
+          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+          RETURNING *
+        `, [cj_pid, resolvedVid, product_name, product_description, product_image, costPrice, suggested_price, suggested_price, category, stockQuantity]);
+
+        const curatedProductId = result.rows[0].id;
+
+        // Insert warehouse details
+        for (const wh of inventory) {
+          await pool.query(`
+            INSERT INTO curated_product_inventories 
+            (curated_product_id, cj_pid, cj_vid, warehouse_id, warehouse_name, country_code, total_inventory, cj_inventory, factory_inventory, updated_at)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, NOW())
+          `, [
+            curatedProductId,
+            cj_pid,
+            resolvedVid,
+            wh.warehouseId,
+            wh.warehouseName,
+            wh.countryCode,
+            wh.totalInventory,
+            wh.cjInventory,
+            wh.factoryInventory
+          ]);
+        }
+
+        return res.status(201).json({ product: result.rows[0] });
       } catch (e) {
         console.warn('Failed to fetch initial inventory for vid', resolvedVid, e.message);
       }
     }
 
+    // Fallback: insert without inventory if we couldn't fetch it
     const result = await pool.query(`
       INSERT INTO curated_products 
       (cj_pid, cj_vid, product_name, product_description, product_image, cj_cost_price, suggested_price, custom_price, category, stock_quantity)
