@@ -136,7 +136,7 @@ app.listen(port, () => {
       try {
         const limit = process.env.CJ_INVENTORY_SYNC_BATCH_LIMIT ? Number(process.env.CJ_INVENTORY_SYNC_BATCH_LIMIT) : undefined;
         const started = Date.now();
-        const result = await syncCuratedInventory({ limit });
+        const result = await syncCuratedInventory({ limit, syncType: 'scheduled' });
         const elapsed = Date.now() - started;
         console.log(`🗃️  CJ inventory sync completed: updated=${result.updated} failures=${result.failures} processed=${result.processed} in ${elapsed}ms`);
       } catch (e) {
