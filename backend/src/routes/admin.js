@@ -135,12 +135,36 @@ router.post('/products', async (req, res) => {
     // Calculate suggested price (2x markup)
     const suggested_price = costPrice * 2;
 
+    // Fetch initial stock from CJ if we have a variant ID
+    let stockQuantity = 0;
+    let resolvedVid = cj_vid;
+
+    if (!resolvedVid && cj_pid) {
+      // Try to fetch product details and pick first variant
+      try {
+        const details = await cjClient.getProductDetails(cj_pid);
+        resolvedVid = details?.variants?.[0]?.vid || null;
+      } catch (e) {
+        console.warn('Failed to fetch CJ details for pid', cj_pid, e.message);
+      }
+    }
+
+    if (resolvedVid) {
+      try {
+        const inventory = await cjClient.getInventory(resolvedVid);
+        stockQuantity = inventory.reduce((sum, w) => sum + (Number(w.totalInventory) || 0), 0);
+        console.log(`📦 Fetched initial stock for ${cj_pid}: ${stockQuantity}`);
+      } catch (e) {
+        console.warn('Failed to fetch initial inventory for vid', resolvedVid, e.message);
+      }
+    }
+
     const result = await pool.query(`
       INSERT INTO curated_products 
-      (cj_pid, cj_vid, product_name, product_description, product_image, cj_cost_price, suggested_price, custom_price, category)
-      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+      (cj_pid, cj_vid, product_name, product_description, product_image, cj_cost_price, suggested_price, custom_price, category, stock_quantity)
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
       RETURNING *
-    `, [cj_pid, cj_vid, product_name, product_description, product_image, costPrice, suggested_price, suggested_price, category]);
+    `, [cj_pid, resolvedVid, product_name, product_description, product_image, costPrice, suggested_price, suggested_price, category, stockQuantity]);
 
     res.status(201).json({ product: result.rows[0] });
   } catch (error) {
