@@ -200,6 +200,10 @@ export const cjClient = {
     }
 
     const rawList = (json.data.list || []);
+    // Debug: log first product's raw structure to see all available fields
+    if (rawList.length > 0) {
+      console.log('📋 CJ Product API raw fields sample:', JSON.stringify(rawList[0], null, 2));
+    }
     const items = rawList.map((p) => {
       // Attempt to derive the origin country from several possible CJ fields.
       // CJ product list responses may include one of these (field names vary between docs & envs):
@@ -301,7 +305,13 @@ export const cjClient = {
       throw new Error('CJ getInventory failed: ' + (json.message || 'Unknown error'));
     }
 
-    return (json.data || []).map((stock) => ({
+    const inventoryList = json.data || [];
+    // Debug: log first warehouse's raw structure to see all available fields
+    if (inventoryList.length > 0) {
+      console.log('📦 CJ Inventory API raw fields sample:', JSON.stringify(inventoryList[0], null, 2));
+    }
+
+    return inventoryList.map((stock) => ({
       vid: stock.vid,
       warehouseId: stock.areaId,
       warehouseName: stock.areaEn,
