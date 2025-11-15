@@ -75,13 +75,79 @@ router.get('/inventory/curated', optionalAuth, async (_req, res) => {
 router.post('/inventory/sync', requireAdmin, async (req, res) => {
   try {
     const { limit } = req.body || {};
-    const result = await syncCuratedInventory({ limit: limit ? Number(limit) : undefined });
+    const result = await syncCuratedInventory({ 
+      limit: limit ? Number(limit) : undefined,
+      syncType: 'manual'
+    });
     res.json(result);
   } catch (err) {
     console.error('Curated inventory sync error:', err);
     res.status(500).json({ error: 'Inventory sync failed', details: err.message });
   }
 });
+
+// 3d. Get sync history (admin only)
+// GET /api/cj/inventory/sync-history?limit=10
+router.get('/inventory/sync-history', requireAdmin, async (req, res) => {
+  try {
+    const limit = req.query.limit ? Number(req.query.limit) : 20;
+    const result = await pool.query(
+      `SELECT id, started_at, completed_at, products_updated, products_failed, 
+              status, error_message, sync_type,
+              EXTRACT(EPOCH FROM (completed_at - started_at)) as duration_seconds
+       FROM inventory_sync_history 
+       ORDER BY started_at DESC 
+       LIMIT $1`,
+      [limit]
+    );
+    res.json({ history: result.rows });
+  } catch (err) {
+    console.error('Sync history fetch error:', err);
+    res.status(500).json({ error: 'Failed to fetch sync history', details: err.message });
+  }
+});
+
+// 3e. Get current sync status (admin only)
+// GET /api/cj/inventory/sync-status
+router.get('/inventory/sync-status', requireAdmin, async (req, res) => {
+  try {
+    // Get last completed sync
+    const lastSync = await pool.query(
+      `SELECT started_at, completed_at, products_updated, products_failed, status, sync_type
+       FROM inventory_sync_history 
+       WHERE status = 'completed'
+       ORDER BY started_at DESC 
+       LIMIT 1`
+    );
+    
+    // Check if a sync is currently running
+    const runningSync = await pool.query(
+      `SELECT id, started_at, sync_type
+       FROM inventory_sync_history 
+       WHERE status = 'running'
+       ORDER BY started_at DESC 
+       LIMIT 1`
+    );
+
+    const intervalMs = Number(process.env.CJ_INVENTORY_SYNC_INTERVAL_MS || 15 * 60 * 1000);
+    const lastSyncData = lastSync.rows[0];
+    const nextScheduledSync = lastSyncData?.started_at 
+      ? new Date(new Date(lastSyncData.started_at).getTime() + intervalMs)
+      : null;
+
+    res.json({
+      lastSync: lastSyncData || null,
+      isRunning: runningSync.rows.length > 0,
+      currentSync: runningSync.rows[0] || null,
+      nextScheduledSync,
+      syncInterval: intervalMs,
+    });
+  } catch (err) {
+    console.error('Sync status fetch error:', err);
+    res.status(500).json({ error: 'Failed to fetch sync status', details: err.message });
+  }
+});
+
 
 // 3. Check inventory for a variant
 // Keep AFTER the curated/sync routes so dynamic param does not match them
