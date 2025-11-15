@@ -10,6 +10,7 @@ import { router as setupRouter } from './routes/setup.js';
 import { router as productsRouter } from './routes/products.js';
 import { router as cartRouter } from './routes/cart.js';
 import { cjClient } from './services/cjClient.js';
+import { syncCuratedInventory } from './services/inventorySync.js';
 import db from './db.js';
 
 // Load environment variables
@@ -124,4 +125,31 @@ app.get('/api/health', async (req, res) => {
 
 app.listen(port, () => {
   console.log(`Server running on port ${port}`);
+  // Optional scheduled CJ inventory sync
+  const enabled = process.env.CJ_INVENTORY_SYNC_ENABLED !== 'false';
+  if (enabled) {
+    const intervalMs = Number(process.env.CJ_INVENTORY_SYNC_INTERVAL_MS || 15 * 60 * 1000); // default 15 min
+    let inventorySyncRunning = false;
+    const runSync = async () => {
+      if (inventorySyncRunning) return; // prevent overlapping runs
+      inventorySyncRunning = true;
+      try {
+        const limit = process.env.CJ_INVENTORY_SYNC_BATCH_LIMIT ? Number(process.env.CJ_INVENTORY_SYNC_BATCH_LIMIT) : undefined;
+        const started = Date.now();
+        const result = await syncCuratedInventory({ limit });
+        const elapsed = Date.now() - started;
+        console.log(`🗃️  CJ inventory sync completed: updated=${result.updated} failures=${result.failures} processed=${result.processed} in ${elapsed}ms`);
+      } catch (e) {
+        console.error('❌ CJ inventory scheduled sync failed:', e.message);
+      } finally {
+        inventorySyncRunning = false;
+      }
+    };
+    // Kick off first run shortly after start (stagger to avoid cold start pressure)
+    setTimeout(runSync, 5000);
+    setInterval(runSync, intervalMs);
+    console.log(`⏱️  CJ inventory sync scheduler active (interval=${intervalMs}ms, enabled=${enabled})`);
+  } else {
+    console.log('⏱️  CJ inventory sync scheduler disabled via CJ_INVENTORY_SYNC_ENABLED=false');
+  }
 });
