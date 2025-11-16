@@ -57,6 +57,11 @@ async function initDb() {
       payfast_payment_id TEXT,
       payfast_signature TEXT,
       customer_email TEXT,
+      shipping_country TEXT DEFAULT 'ZA',
+      shipping_method TEXT,
+      insurance_selected BOOLEAN DEFAULT FALSE,
+      insurance_cost REAL DEFAULT 0,
+      insurance_coverage REAL DEFAULT 0,
       created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
       updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     );
@@ -64,6 +69,13 @@ async function initDb() {
 
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_orders_user_id ON orders(user_id);`);
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_orders_status ON orders(status);`);
+  
+  // Ensure new order columns exist (idempotent adds for existing deployments)
+  await pool.query(`ALTER TABLE orders ADD COLUMN IF NOT EXISTS shipping_country TEXT DEFAULT 'ZA';`);
+  await pool.query(`ALTER TABLE orders ADD COLUMN IF NOT EXISTS shipping_method TEXT;`);
+  await pool.query(`ALTER TABLE orders ADD COLUMN IF NOT EXISTS insurance_selected BOOLEAN DEFAULT FALSE;`);
+  await pool.query(`ALTER TABLE orders ADD COLUMN IF NOT EXISTS insurance_cost REAL DEFAULT 0;`);
+  await pool.query(`ALTER TABLE orders ADD COLUMN IF NOT EXISTS insurance_coverage REAL DEFAULT 0;`);
   
   // Migration: Change user_id from INTEGER to TEXT for Supabase UUID compatibility
   try {
