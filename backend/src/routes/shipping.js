@@ -20,26 +20,23 @@ const optionalAuth = (req, res, next) => {
  * {
  *   items: [{ cj_vid: 'V123', quantity: 2 }],
  *   shippingCountry: 'ZA',
- *   postalCode: '2196' // optional
+ *   postalCode: '2196', // optional
+ *   orderValue: 1500.00 // total order value for insurance calculation
  * }
  * 
  * Returns:
  * {
- *   quotes: [
- *     {
- *       logisticName: 'CJ Packet-Registered',
- *       totalPostage: 45.50,
- *       deliveryDay: '15-25',
- *       currency: 'USD',
- *       tracking: true,
- *       priceZAR: 850.00 // converted to ZAR
- *     }
- *   ]
+ *   quotes: [...],
+ *   insurance: {
+ *     available: true,
+ *     costZAR: 45.00,
+ *     coverage: 1500.00
+ *   }
  * }
  */
 router.post('/quote', optionalAuth, async (req, res) => {
   try {
-    const { items, shippingCountry, postalCode } = req.body;
+    const { items, shippingCountry, postalCode, orderValue } = req.body;
 
     // Validation
     if (!items || !Array.isArray(items) || items.length === 0) {
@@ -72,17 +69,30 @@ router.post('/quote', optionalAuth, async (req, res) => {
     });
 
     // Convert USD to ZAR (approximate rate, update periodically)
-    const USD_TO_ZAR = 18.5; // Update this regularly or use a currency API
+    const USD_TO_ZAR = 19.0; // Updated exchange rate
     const quotesWithZAR = quotes.map(q => ({
       ...q,
       priceZAR: Math.ceil(q.totalPostage * USD_TO_ZAR * 100) / 100, // Round to 2 decimals
       priceUSD: q.totalPostage
     }));
 
+    // Calculate insurance cost (3% of order value, min R25, max R500)
+    const insuranceData = orderValue ? {
+      available: true,
+      costZAR: Math.min(Math.max(Math.ceil(orderValue * 0.03), 25), 500),
+      coverage: orderValue,
+      percentage: 3
+    } : {
+      available: false,
+      costZAR: 0,
+      coverage: 0
+    };
+
     res.json({
       quotes: quotesWithZAR,
       shippingCountry,
-      fromCountry: 'CN'
+      fromCountry: 'CN',
+      insurance: insuranceData
     });
 
   } catch (err) {
