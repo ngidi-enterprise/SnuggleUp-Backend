@@ -57,10 +57,25 @@ router.get('/:orderId', authenticateToken, async (req, res) => {
 // Create new order (called from payment flow)
 export const createOrder = async (userId, orderData) => {
   try {
-    const { orderNumber, items, subtotal, shipping, discount, total, email } = orderData;
+    const { 
+      orderNumber, 
+      items, 
+      subtotal, 
+      shipping, 
+      discount, 
+      total, 
+      email,
+      shippingCountry,
+      shippingMethod,
+      insurance
+    } = orderData;
+    
     const result = await db.query(
-      `INSERT INTO orders (user_id, order_number, items, subtotal, shipping, discount, total, customer_email, status)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'pending') RETURNING id`,
+      `INSERT INTO orders (
+        user_id, order_number, items, subtotal, shipping, discount, total, customer_email, 
+        shipping_country, shipping_method, insurance_selected, insurance_cost, insurance_coverage, status
+      )
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, 'pending') RETURNING id`,
       [
         userId,
         orderNumber,
@@ -69,7 +84,12 @@ export const createOrder = async (userId, orderData) => {
         shipping,
         discount || 0,
         total,
-        email
+        email,
+        shippingCountry || 'ZA',
+        shippingMethod || 'STANDARD',
+        insurance?.selected || false,
+        insurance?.cost || 0,
+        insurance?.coverage || 0
       ]
     );
     return result.rows[0].id;
