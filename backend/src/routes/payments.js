@@ -2,7 +2,7 @@ import express from 'express';
 import crypto from 'crypto';
 import fetch from 'node-fetch';
 import { authenticateToken } from '../middleware/auth.js';
-import { updateOrderStatus } from './orders.js';
+import { createOrder, updateOrderStatus } from './orders.js';
 
 export const router = express.Router();
 
@@ -18,13 +18,55 @@ const optionalAuth = (req, res, next) => {
 // Create a payment
 router.post('/create', optionalAuth, async (req, res) => {
   try {
-    const { amount, email, orderItems } = req.body;
+    const { 
+      amount, 
+      email, 
+      orderItems, 
+      subtotal, 
+      shipping, 
+      discount, 
+      shippingMethod, 
+      shippingQuoted,
+      shippingCountry,
+      insurance 
+    } = req.body;
     
-    console.log('💰 Creating PayFast payment:', { amount, email });
+    console.log('💰 Creating PayFast payment:', { 
+      amount, 
+      email, 
+      subtotal, 
+      shipping, 
+      discount,
+      insurance: insurance?.selected ? `R${insurance.cost}` : 'None'
+    });
     
     // Get frontend URL from environment or request origin
     const frontendUrl = process.env.FRONTEND_URL || req.headers.origin || 'https://vitejsviteeadmfezy-esxh--5173--1db57326.local-credentialless.webcontainer.io';
     const backendUrl = process.env.BACKEND_URL || 'https://snuggleup-backend.onrender.com';
+    
+    // Generate unique order number
+    const orderNumber = `ORDER-${Date.now()}`;
+    
+    // Create order record in database (with pending status)
+  const userId = req.user?.userId || 'guest';
+    try {
+      await createOrder(userId, {
+        orderNumber,
+        items: orderItems,
+        subtotal: subtotal || 0,
+        shipping: shipping || 0,
+        discount: discount || 0,
+        total: amount,
+        email,
+        shippingCountry,
+        shippingMethod,
+        insurance
+      });
+      console.log('✅ Order created:', orderNumber);
+    } catch (orderError) {
+      console.error('Failed to create order record:', orderError);
+      // Continue with payment even if order creation fails - webhook will update it
+    }
     
     // PayFast payment data - order matters for signature!
     // Use shorter URLs to avoid PayFast URL length/validation issues
@@ -36,7 +78,7 @@ router.post('/create', optionalAuth, async (req, res) => {
       notify_url: `${backendUrl}/api/payments/notify`,
       name_first: req.user?.email?.split('@')[0] || 'Customer',
       email_address: email,
-      m_payment_id: `ORDER-${Date.now()}`,
+      m_payment_id: orderNumber,
       amount: parseFloat(amount).toFixed(2),
       item_name: `Order ${orderItems?.length || 0} items`,
       item_description: orderItems?.map(i => i.name).join(', ').substring(0, 100) || 'SnuggleUp order',
