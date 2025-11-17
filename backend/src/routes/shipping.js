@@ -49,7 +49,7 @@ router.post('/quote', optionalAuth, async (req, res) => {
     // Map cart items to CJ format: { vid, quantity }
     const cjProducts = items.map(item => ({
       vid: item.cj_vid,
-      quantity: Number(item.quantity || 1)
+      quantity: item.quantity || 1
     }));
 
     // Validate all items have cj_vid
@@ -60,41 +60,13 @@ router.post('/quote', optionalAuth, async (req, res) => {
       });
     }
 
-    // Debug logging to investigate quote failures in production
-    console.log('🚚 Shipping quote request:', {
-      shippingCountry,
-      postalCode: postalCode || null,
-      itemsCount: items.length,
+    // Call CJ freight calculator
+    const quotes = await cjClient.getFreightQuote({
+      shippingCountryCode: shippingCountry,
+      fromCountryCode: 'CN', // All products ship from China
+      postalCode,
       products: cjProducts
     });
-
-    // Call CJ freight calculator (try CN first, fallback to US warehouse if needed)
-    let quotes = [];
-    try {
-      quotes = await cjClient.getFreightQuote({
-        shippingCountryCode: shippingCountry,
-        fromCountryCode: 'CN',
-        postalCode,
-        products: cjProducts
-      });
-      if (!quotes || quotes.length === 0) {
-        console.warn('⚠️ No quotes from CN. Retrying with US origin…');
-        quotes = await cjClient.getFreightQuote({
-          shippingCountryCode: shippingCountry,
-          fromCountryCode: 'US',
-          postalCode,
-          products: cjProducts
-        });
-      }
-    } catch (firstErr) {
-      console.warn('⚠️ CN quote failed, retrying with US:', firstErr?.message);
-      quotes = await cjClient.getFreightQuote({
-        shippingCountryCode: shippingCountry,
-        fromCountryCode: 'US',
-        postalCode,
-        products: cjProducts
-      });
-    }
 
     // Convert USD to ZAR (approximate rate, update periodically)
     const USD_TO_ZAR = 19.0; // Updated exchange rate
@@ -124,16 +96,10 @@ router.post('/quote', optionalAuth, async (req, res) => {
     });
 
   } catch (err) {
-    // Bubble up the most helpful diagnostics
-    console.error('❌ Shipping quote error:', {
-      message: err?.message,
-      status: err?.status,
-      response: err?.response || undefined
-    });
+    console.error('Shipping quote error:', err);
     res.status(500).json({ 
       error: 'Failed to get shipping quotes', 
-      details: err?.message || 'Unknown error',
-      upstream: err?.response || null
+      details: err.message 
     });
   }
 });
