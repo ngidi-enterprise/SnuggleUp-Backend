@@ -1,510 +1,127 @@
-import crypto from 'crypto';
+import express from 'express';
+import { cjClient } from '../services/cjClient.js';
+import pool from '../db.js';
+import { authenticateToken } from '../middleware/auth.js';
 
-// CJ Dropshipping API client (lightweight, pluggable for your credentials)
-// This implementation supports two modes:
-// 1) Token mode: Provide CJ_ACCESS_TOKEN (recommended quick start)
-// 2) App mode (scaffold): Provide CJ_APP_KEY/CJ_APP_SECRET and implement token/sign per CJ docs
+export const router = express.Router();
 
-
-const CJ_BASE_URL = process.env.CJ_BASE_URL || 'https://developers.cjdropshipping.com/api2.0/v1';
-// Per CJ docs, getAccessToken only needs apiKey. We keep email optional if their backend still accepts it.
-const CJ_EMAIL = process.env.CJ_EMAIL || '';
-const CJ_API_KEY = process.env.CJ_API_KEY || '';
-const CJ_WEBHOOK_SECRET = process.env.CJ_WEBHOOK_SECRET || '';
-const CJ_ACCESS_TOKEN = process.env.CJ_ACCESS_TOKEN || ''; // Optional: pre-set token to avoid rate limits
-
-let cjTokenCache = {
-  accessToken: CJ_ACCESS_TOKEN, // Start with env token if provided
-  refreshToken: '',
-  accessTokenExpiry: CJ_ACCESS_TOKEN ? Date.now() + (15 * 24 * 60 * 60 * 1000) : 0, // 15 days if pre-set
-  refreshTokenExpiry: 0,
+// Optional auth middleware - allows both authenticated and anonymous users
+const optionalAuth = (req, res, next) => {
+  const authHeader = req.headers['authorization'];
+  if (!authHeader) return next();
+  authenticateToken(req, res, next);
 };
 
-// Simple search cache to reduce duplicate API calls (5 minute TTL)
-const searchCache = new Map();
-const SEARCH_CACHE_TTL = 5 * 60 * 1000; // 5 minutes
-
-function getCacheKey(params) {
-  return JSON.stringify(params);
-}
-
-function getFromCache(key) {
-  const cached = searchCache.get(key);
-  if (cached && Date.now() - cached.timestamp < SEARCH_CACHE_TTL) {
-    console.log('📦 Using cached search result');
-    return cached.data;
-  }
-  return null;
-}
-
-function setCache(key, data) {
-  searchCache.set(key, { data, timestamp: Date.now() });
-  // Clean old entries if cache gets too large
-  if (searchCache.size > 100) {
-    const firstKey = searchCache.keys().next().value;
-    searchCache.delete(firstKey);
-  }
-}
-
-// CJ has a strict QPS limit (often 1 request/second). We'll throttle and retry.
-let lastCJCallAt = 0;
-const CJ_MIN_INTERVAL_MS = 1500; // Increased to 1.5s for better safety margin
-
-async function sleep(ms) { return new Promise((r) => setTimeout(r, ms)); }
-
-async function ensureThrottle() {
-  const now = Date.now();
-  const diff = now - lastCJCallAt;
-  if (diff < CJ_MIN_INTERVAL_MS) {
-    await sleep(CJ_MIN_INTERVAL_MS - diff);
-  }
-  lastCJCallAt = Date.now();
-}
-
-
-// Helper: simple fetch wrapper (uses global fetch in Node >=18)
-async function http(method, url, { query, body, headers } = {}) {
-  let fullUrl = url;
-  if (query) {
-    const params = new URLSearchParams();
-    Object.entries(query).forEach(([k, v]) => {
-      if (v !== undefined && v !== null && v !== '') params.set(k, String(v));
-    });
-    fullUrl += '?' + params.toString();
-  }
-
-  // Up to 3 attempts with backoff on 429 Too Many Requests
-  const maxAttempts = 3;
-  let attempt = 0;
-  while (true) {
-    attempt += 1;
-    await ensureThrottle();
-    const res = await fetch(fullUrl, {
-      method,
-      headers: {
-        'Content-Type': 'application/json',
-        ...(headers || {}),
-      },
-      body: body ? JSON.stringify(body) : undefined,
-    });
-
-    const text = await res.text();
-    let json;
-    try { json = text ? JSON.parse(text) : {}; } catch { json = { raw: text }; }
-
-    if (res.ok) return json;
-
-    const err = new Error(`CJ HTTP ${res.status}`);
-    err.status = res.status;
-    err.response = json;
-
-    // CJ rate limit: sometimes returns 429 with code/message in body
-    const isRateLimited = res.status === 429 || json?.code === 1600200 || /Too Many Requests|QPS limit/i.test(json?.message || '');
-    if (isRateLimited && attempt < maxAttempts) {
-      // Exponential backoff: wait longer each retry (2s, 4s, 8s)
-      const backoffMs = CJ_MIN_INTERVAL_MS * Math.pow(2, attempt);
-      console.warn(`⏳ CJ rate limit hit, retrying in ${backoffMs}ms (attempt ${attempt}/${maxAttempts})`);
-      await sleep(backoffMs);
-      continue;
-    }
-    throw err;
-  }
-}
-
-// Refresh CJ access token using refreshToken
-async function refreshAccessToken() {
-  if (!cjTokenCache.refreshToken) throw new Error('No CJ refresh token available');
-  const url = CJ_BASE_URL + '/authentication/refreshAccessToken';
-  const resp = await http('POST', url, {
-    body: { refreshToken: cjTokenCache.refreshToken },
-  });
-  if (!resp.result || !resp.data?.accessToken) {
-    throw new Error('CJ refreshAccessToken failed: ' + (resp.message || 'Unknown error'));
-  }
-  cjTokenCache.accessToken = resp.data.accessToken;
-  cjTokenCache.refreshToken = resp.data.refreshToken || cjTokenCache.refreshToken;
-  cjTokenCache.accessTokenExpiry = new Date(resp.data.accessTokenExpiryDate).getTime();
-  cjTokenCache.refreshTokenExpiry = new Date(resp.data.refreshTokenExpiryDate).getTime();
-  console.log('♻️  CJ access token refreshed, expires:', new Date(cjTokenCache.accessTokenExpiry).toISOString());
-  return cjTokenCache.accessToken;
-}
-
-// Get and cache CJ access token (or refresh it if near expiry)
-async function getAccessToken(force = false) {
-  const now = Date.now();
-  // Use cached token if valid (check with 10 minute buffer instead of 1 minute)
-  if (!force && cjTokenCache.accessToken && cjTokenCache.accessTokenExpiry > now + 600000) {
-    console.log('✅ Using cached CJ access token');
-    return cjTokenCache.accessToken;
-  }
-  if (!CJ_EMAIL || !CJ_API_KEY) {
-    throw new Error('CJ_EMAIL and CJ_API_KEY must be set in environment');
-  }
-  
-  // Try refresh first if we have a (not expired) refresh token.
-  if (!force && cjTokenCache.refreshToken && cjTokenCache.refreshTokenExpiry > now + 600000) {
-    try {
-      return await refreshAccessToken();
-    } catch (e) {
-      console.warn('⚠️  CJ refresh failed, will request new token:', e?.message || e);
-    }
-  }
-
-  console.log('🔄 Requesting new CJ access token...');
-  const url = CJ_BASE_URL + '/authentication/getAccessToken';
-  
+/**
+ * POST /api/shipping/quote
+ * Get real-time shipping quotes from CJ for cart items
+ * 
+ * Body:
+ * {
+ *   items: [{ cj_vid: 'V123', quantity: 2 }],
+ *   shippingCountry: 'ZA',
+ *   postalCode: '2196', // optional
+ *   orderValue: 1500.00 // total order value for insurance calculation
+ * }
+ * 
+ * Returns:
+ * {
+ *   quotes: [...],
+ *   insurance: {
+ *     available: true,
+ *     costZAR: 45.00,
+ *     coverage: 1500.00
+ *   }
+ * }
+ */
+router.post('/quote', optionalAuth, async (req, res) => {
   try {
-    const resp = await http('POST', url, {
-      body: {
-        email: CJ_EMAIL,
-        apiKey: CJ_API_KEY,
-      },
-    });
-    if (!resp.result || !resp.data?.accessToken) {
-      throw new Error('CJ getAccessToken failed: ' + (resp.message || 'Unknown error'));
+    const { items, shippingCountry, postalCode, orderValue } = req.body;
+
+    // Validation
+    if (!items || !Array.isArray(items) || items.length === 0) {
+      return res.status(400).json({ error: 'items array is required' });
     }
-    cjTokenCache.accessToken = resp.data.accessToken;
-    cjTokenCache.refreshToken = resp.data.refreshToken;
-    cjTokenCache.accessTokenExpiry = new Date(resp.data.accessTokenExpiryDate).getTime();
-    cjTokenCache.refreshTokenExpiry = new Date(resp.data.refreshTokenExpiryDate).getTime();
-    console.log('✅ CJ access token obtained, expires:', new Date(cjTokenCache.accessTokenExpiry).toISOString());
-    return cjTokenCache.accessToken;
+    if (!shippingCountry) {
+      return res.status(400).json({ error: 'shippingCountry is required' });
+    }
+
+    // Map cart items to CJ format: { vid, quantity }
+    const cjProducts = items.map(item => ({
+      vid: item.cj_vid,
+      quantity: item.quantity || 1
+    }));
+
+    // Validate all items have cj_vid
+    const missingVid = cjProducts.find(p => !p.vid);
+    if (missingVid) {
+      return res.status(400).json({ 
+        error: 'All items must have cj_vid (variant ID)' 
+      });
+    }
+
+    // Call CJ freight calculator
+    const quotes = await cjClient.getFreightQuote({
+      startCountryCode: 'CN', // All products ship from China
+      endCountryCode: shippingCountry,
+      postalCode,
+      products: cjProducts
+    });
+
+    // Convert USD to ZAR (approximate rate, update periodically)
+    const USD_TO_ZAR = 19.0; // Updated exchange rate
+    const quotesWithZAR = quotes.map(q => ({
+      ...q,
+      priceZAR: Math.ceil(q.totalPostage * USD_TO_ZAR * 100) / 100, // Round to 2 decimals
+      priceUSD: q.totalPostage
+    }));
+
+    // Calculate insurance cost (3% of order value, min R25, max R500)
+    const insuranceData = orderValue ? {
+      available: true,
+      costZAR: Math.min(Math.max(Math.ceil(orderValue * 0.03), 25), 500),
+      coverage: orderValue,
+      percentage: 3
+    } : {
+      available: false,
+      costZAR: 0,
+      coverage: 0
+    };
+
+    res.json({
+      quotes: quotesWithZAR,
+      shippingCountry,
+      fromCountry: 'CN',
+      insurance: insuranceData
+    });
+
   } catch (err) {
-    // If we hit rate limit but have an old token, use it anyway
-    if (err.status === 429 && cjTokenCache.accessToken) {
-      console.warn('⚠️ CJ token rate limit hit, using cached token (may be expired)');
-      return cjTokenCache.accessToken;
-    }
-    throw err;
+    console.error('Shipping quote error:', err);
+    res.status(500).json({ 
+      error: 'Failed to get shipping quotes', 
+      details: err.message 
+    });
   }
-}
+});
 
-
-// Placeholder signing (for webhook verification)
-function hmacSHA256(content, secret) {
-  return crypto.createHmac('sha256', secret).update(content).digest('hex');
-}
-
-export const cjClient = {
-  getStatus() {
-    return {
-      baseUrl: CJ_BASE_URL,
-      hasEmail: Boolean(CJ_EMAIL),
-      hasApiKey: Boolean(CJ_API_KEY),
-      webhookVerification: Boolean(CJ_WEBHOOK_SECRET),
-      tokenExpiry: cjTokenCache.accessTokenExpiry,
-    };
-  },
-
-  // 1. Search CJ products (GET /product/list)
-  async searchProducts({ productNameEn, pageNum = 1, pageSize = 20, categoryId, minPrice, maxPrice } = {}) {
-    // Check cache first
-    const cacheKey = getCacheKey({ productNameEn, pageNum, pageSize, categoryId, minPrice, maxPrice });
-    const cached = getFromCache(cacheKey);
-    if (cached) return cached;
-
-    const normalizeUrl = (u) => {
-      if (!u) return '';
-      let s = String(u).trim();
-      if (s.startsWith('//')) s = 'https:' + s;
-      if (s.startsWith('http://')) s = s.replace(/^http:/, 'https:');
-      return s;
-    };
-    const accessToken = await getAccessToken();
-    const url = CJ_BASE_URL + '/product/list';
-    const query = { 
-      productNameEn: productNameEn || '',
-      pageNum,
-      pageSize,
-      categoryId,
-      minPrice,
-      maxPrice,
-      // Hint to CJ API: only return products sourced from China
-      fromCountryCode: 'CN',
-    };
-    const json = await http('GET', url, {
-      query,
-      headers: { 'CJ-Access-Token': accessToken },
-    });
-    
-    if (!json.result || !json.data) {
-      console.error('CJ searchProducts error:', JSON.stringify(json));
-      throw new Error('CJ searchProducts failed: ' + (json.message || 'Unknown error'));
-    }
-
-    const rawList = (json.data.list || []);
-    // Debug: log first product's raw structure to see all available fields
-    if (rawList.length > 0) {
-      console.log('📋 CJ Product API raw fields sample:', JSON.stringify(rawList[0], null, 2));
-    }
-    const items = rawList.map((p) => {
-      // Attempt to derive the origin country from several possible CJ fields.
-      // CJ product list responses may include one of these (field names vary between docs & envs):
-      //  - fromCountryCode
-      //  - countryCode
-      //  - sourceCountryCode
-      // If none are present we set originCountry to null.
-      const originCountry = p.fromCountryCode || p.countryCode || p.sourceCountryCode || null;
-      return {
-        pid: p.pid,
-        name: p.productNameEn,
-        sku: p.productSku,
-        price: p.sellPrice,
-        image: normalizeUrl(p.productImage),
-        categoryId: p.categoryId,
-        categoryName: p.categoryName,
-        weight: p.productWeight,
-        isFreeShipping: p.isFreeShipping,
-        listedNum: p.listedNum,
-        originCountry,
-      };
-    }).filter(it => {
-      // Prefer explicit CN; if the field is absent (CJ sometimes omits it),
-      // keep the item because we already requested fromCountryCode=CN upstream.
-      return it.originCountry === 'CN' || it.originCountry === null || it.originCountry === undefined;
-    });
-
-    const result = {
-      source: 'cj',
-      items,
-      pageNum: json.data.pageNum,
-      pageSize: json.data.pageSize,
-      // total reflects results after upstream CN filter and safety filter above
-      total: items.length,
-      filtered: {
-        applied: 'fromCountryCode=CN (query) + originCountry==CN||missing (post-filter)',
-        originalTotal: json.data.total,
-        originalReturned: rawList.length
-      }
-    };
-    
-    // Cache the result for 5 minutes
-    setCache(cacheKey, result);
-    return result;
-  },
-
-  // 2. Get product details with variants (GET /product/query)
-  async getProductDetails(pid) {
-    const normalizeUrl = (u) => {
-      if (!u) return '';
-      let s = String(u).trim();
-      if (s.startsWith('//')) s = 'https:' + s;
-      if (s.startsWith('http://')) s = s.replace(/^http:/, 'https:');
-      return s;
-    };
-    const accessToken = await getAccessToken();
-    const url = CJ_BASE_URL + '/product/query';
-    const query = { pid };
-    const json = await http('GET', url, {
-      query,
-      headers: { 'CJ-Access-Token': accessToken },
-    });
-
-    if (!json.result || !json.data) {
-      throw new Error('CJ getProductDetails failed: ' + (json.message || 'Unknown error'));
-    }
-
-    const product = json.data;
-    return {
-      pid: product.pid,
-      name: product.productNameEn,
-      sku: product.productSku,
-      price: product.sellPrice,
-      image: normalizeUrl(product.productImage),
-      description: product.description,
-      weight: product.productWeight,
-      categoryId: product.categoryId,
-      categoryName: product.categoryName,
-      variants: (product.variants || []).map((v) => ({
-        vid: v.vid,
-        pid: v.pid,
-        name: v.variantNameEn,
-        sku: v.variantSku,
-        price: v.variantSellPrice,
-        image: normalizeUrl(v.variantImage),
-        weight: v.variantWeight,
-        key: v.variantKey,
-      })),
-    };
-  },
-
-  // 3. Check inventory for a variant (GET /product/stock/queryByVid)
-  async getInventory(vid) {
-    const accessToken = await getAccessToken();
-    const url = CJ_BASE_URL + '/product/stock/queryByVid';
-    const query = { vid };
-    const json = await http('GET', url, {
-      query,
-      headers: { 'CJ-Access-Token': accessToken },
-    });
-
-    if (!json.result || !json.data) {
-      throw new Error('CJ getInventory failed: ' + (json.message || 'Unknown error'));
-    }
-
-    const inventoryList = json.data || [];
-    // Debug: log first warehouse's raw structure to see all available fields
-    if (inventoryList.length > 0) {
-      console.log('📦 CJ Inventory API raw fields sample:', JSON.stringify(inventoryList[0], null, 2));
-    }
-
-    return inventoryList.map((stock) => ({
-      vid: stock.vid,
-      warehouseId: stock.areaId,
-      warehouseName: stock.areaEn,
-      countryCode: stock.countryCode,
-      totalInventory: stock.totalInventoryNum,
-      cjInventory: stock.cjInventoryNum,
-      factoryInventory: stock.factoryInventoryNum,
-    }));
-  },
-
-  // 4. Create order (POST /shopping/order/createOrderV2)
-  async createOrder(orderData) {
-    const accessToken = await getAccessToken();
-    const url = CJ_BASE_URL + '/shopping/order/createOrderV2';
-    
-    // Validate required fields
-    if (!orderData.orderNumber) throw new Error('orderNumber is required');
-    if (!orderData.shippingCountryCode) throw new Error('shippingCountryCode is required');
-    if (!orderData.shippingCustomerName) throw new Error('shippingCustomerName is required');
-    if (!orderData.shippingAddress) throw new Error('shippingAddress is required');
-    if (!orderData.logisticName) throw new Error('logisticName is required');
-    if (!orderData.fromCountryCode) throw new Error('fromCountryCode is required');
-    if (!orderData.products || orderData.products.length === 0) {
-      throw new Error('products array is required');
-    }
-
-    const json = await http('POST', url, {
-      body: orderData,
-      headers: { 'CJ-Access-Token': accessToken },
-    });
-
-    if (!json.result || !json.data) {
-      throw new Error('CJ createOrder failed: ' + (json.message || 'Unknown error'));
-    }
-
-    return {
-      orderId: json.data.orderId,
-      orderNumber: json.data.orderNumber,
-      shipmentOrderId: json.data.shipmentOrderId,
-      orderAmount: json.data.orderAmount,
-      productAmount: json.data.productAmount,
-      postageAmount: json.data.postageAmount,
-      orderStatus: json.data.orderStatus,
-      productInfoList: json.data.productInfoList,
-    };
-  },
-
-  // 5. Get order status (GET /shopping/order/getOrderDetail)
-  async getOrderStatus(orderId) {
-    const accessToken = await getAccessToken();
-    const url = CJ_BASE_URL + '/shopping/order/getOrderDetail';
-    const query = { orderId };
-    const json = await http('GET', url, {
-      query,
-      headers: { 'CJ-Access-Token': accessToken },
-    });
-
-    if (!json.result || !json.data) {
-      throw new Error('CJ getOrderStatus failed: ' + (json.message || 'Unknown error'));
-    }
-
-    const order = json.data;
-    return {
-      orderId: order.orderId,
-      orderNum: order.orderNum,
-      cjOrderId: order.cjOrderId,
-      orderStatus: order.orderStatus,
-      trackNumber: order.trackNumber,
-      trackingUrl: order.trackingUrl,
-      logisticName: order.logisticName,
-      orderAmount: order.orderAmount,
-      createDate: order.createDate,
-      paymentDate: order.paymentDate,
-      productList: order.productList,
-    };
-  },
-
-  // 6. Get tracking info (GET /logistic/trackInfo)
-  async getTracking(trackNumber) {
-    const accessToken = await getAccessToken();
-    const url = CJ_BASE_URL + '/logistic/trackInfo';
-    const query = { trackNumber };
-    const json = await http('GET', url, {
-      query,
-      headers: { 'CJ-Access-Token': accessToken },
-    });
-
-    if (!json.result || !json.data) {
-      throw new Error('CJ getTracking failed: ' + (json.message || 'Unknown error'));
-    }
-
-    return (json.data || []).map((track) => ({
-      trackingNumber: track.trackingNumber,
-      logisticName: track.logisticName,
-      trackingFrom: track.trackingFrom,
-      trackingTo: track.trackingTo,
-      deliveryDay: track.deliveryDay,
-      deliveryTime: track.deliveryTime,
-      trackingStatus: track.trackingStatus,
-      lastMileCarrier: track.lastMileCarrier,
-      lastTrackNumber: track.lastTrackNumber,
-    }));
-  },
-
-  // 7. Get freight/shipping quotes (POST /logistic/freightCalculate)
-  // docs vary; we send minimal required fields and let CJ compute postage
-  // payload example:
-  // {
-  //   shippingCountryCode: 'ZA',
-  //   fromCountryCode: 'CN',
-  //   postalCode: '2196', // optional
-  //   products: [{ vid: 'V123', quantity: 2 }]
-  // }
-  async getFreightQuote({ shippingCountryCode, fromCountryCode = 'CN', postalCode, products }) {
-    const accessToken = await getAccessToken();
-    const url = CJ_BASE_URL + '/logistic/freightCalculate';
-
-    if (!shippingCountryCode) throw new Error('shippingCountryCode is required');
-    if (!products || products.length === 0) throw new Error('products array is required');
-
-    const body = {
-      shippingCountryCode,
-      fromCountryCode,
-      products,
-    };
-    if (postalCode) body.postCode = postalCode; // CJ sometimes uses postCode
-
-    const json = await http('POST', url, {
-      body,
-      headers: { 'CJ-Access-Token': accessToken },
-    });
-
-    if (!json.result || !json.data) {
-      throw new Error('CJ getFreightQuote failed: ' + (json.message || 'Unknown error'));
-    }
-
-    // Normalize into a friendly array
-    const list = Array.isArray(json.data) ? json.data : (json.data.list || []);
-    return list.map((m) => ({
-      logisticName: m.logisticName || m.name,
-      totalPostage: Number(m.totalPostage || m.postage || 0),
-      deliveryDay: m.deliveryDay || m.aging || null,
-      currency: m.currency || 'USD',
-      tracking: m.tracking || m.trackingType || undefined,
-    }));
-  },
-
-  // Webhook verification
-  verifyWebhook(headers, body) {
-    if (!CJ_WEBHOOK_SECRET) return true;
-    const payload = typeof body === 'string' ? body : JSON.stringify(body);
-    const expected = hmacSHA256(payload + (headers.timestamp || headers['x-cj-timestamp'] || ''), CJ_WEBHOOK_SECRET);
-    const provided = (headers.signature || headers['x-cj-signature'] || '').toString();
-    return expected === provided;
-  }
-};
-
-// Provide both named and default exports to satisfy different import styles
-export default cjClient;
+/**
+ * GET /api/shipping/countries
+ * Get list of supported shipping countries
+ * (For now, return common countries; can expand later)
+ */
+router.get('/countries', (_req, res) => {
+  res.json({
+    countries: [
+      { code: 'ZA', name: 'South Africa', flag: '🇿🇦' },
+      { code: 'US', name: 'United States', flag: '🇺🇸' },
+      { code: 'GB', name: 'United Kingdom', flag: '🇬🇧' },
+      { code: 'AU', name: 'Australia', flag: '🇦🇺' },
+      { code: 'CA', name: 'Canada', flag: '🇨🇦' },
+      { code: 'DE', name: 'Germany', flag: '🇩🇪' },
+      { code: 'FR', name: 'France', flag: '🇫🇷' },
+      { code: 'IT', name: 'Italy', flag: '🇮🇹' },
+      { code: 'ES', name: 'Spain', flag: '🇪🇸' },
+      { code: 'NL', name: 'Netherlands', flag: '🇳🇱' },
+    ]
+  });
+});
