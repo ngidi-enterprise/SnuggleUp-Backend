@@ -506,6 +506,5 @@ export const cjClient = {
   }
 };
 
-// Provide both named and default exports to satisfy different import styles
-export { cjClient };
+// Default export for compatibility
 export default cjClient;
