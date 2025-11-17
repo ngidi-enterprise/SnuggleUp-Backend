@@ -60,10 +60,10 @@ router.post('/quote', optionalAuth, async (req, res) => {
       });
     }
 
-    // Call CJ freight calculator (correct param names)
+    // Call CJ freight calculator
     const quotes = await cjClient.getFreightQuote({
-      startCountryCode: 'CN', // All products ship from China
-      endCountryCode: shippingCountry,
+      shippingCountryCode: shippingCountry,
+      fromCountryCode: 'CN', // All products ship from China
       postalCode,
       products: cjProducts
     });
