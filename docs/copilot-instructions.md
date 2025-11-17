@@ -6,6 +6,7 @@ Full-stack baby products e-commerce with CJ Dropshipping integration, PayFast pa
 **Critical Constraints**:
 - **Web-only platform**: No desktop apps, Electron, or downloadables. Browser-accessible development environment only (StackBlitz-compatible).
 - **Responsive design**: All UI must work on mobile and desktop with graceful adaptation.
+- **⚠️ CRITICAL BRANDING RULE**: Never mention "CJ Dropshipping" or "CJ" in customer-facing UI/messages. Only use in admin dashboard and backend logs. Use generic terms like "supplier", "shipping provider", or "fulfillment partner" for customers.
 
 ## Architecture & Data Flow
 
@@ -40,6 +41,7 @@ This repo is a web-only React (Vite) frontend + Express (ESM) backend that integ
 - Where to make changes:
   - Add CJ endpoints: `backend/src/services/cjClient.js` -> `backend/src/routes/cj.js` -> frontend `frontend/src/lib/cjApi.js` -> update `CJ_API_REFERENCE.md`.
   - Add auth-required features: frontend use `useAuth()` and backend use `authenticateToken` (not `optionalAuth`).
+  - Admin features: `frontend/src/components/admin/` components use `requireAdmin` middleware on backend routes.
 
 - Quick reference files:
   - CJ throttling: `backend/src/services/cjClient.js`
@@ -47,5 +49,6 @@ This repo is a web-only React (Vite) frontend + Express (ESM) backend that integ
   - CJ catalog + normalization: `frontend/src/components/CJCatalog.jsx`, `frontend/src/lib/cjApi.js`
   - PayFast routes & webhook: `backend/src/routes/payments.js`, `payfast_README.md`
   - DB init: `backend/src/db.js`
+  - GA4 tracking: `frontend/src/lib/analytics.js` (see `GOOGLE_ANALYTICS_SETUP.md`)
 
 If any integration detail is missing or you want more examples (unit tests, sample requests, or a step-by-step PayFast webhook walkthrough), tell me which area to expand and I will iterate.
