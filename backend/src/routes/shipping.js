@@ -61,12 +61,21 @@ router.post('/quote', optionalAuth, async (req, res) => {
     }
 
     // Call CJ freight calculator
+    console.log('🚢 Calling CJ freight API with:', {
+      startCountryCode: 'CN',
+      endCountryCode: shippingCountry,
+      postalCode,
+      products: cjProducts
+    });
+    
     const quotes = await cjClient.getFreightQuote({
       startCountryCode: 'CN', // All products ship from China
       endCountryCode: shippingCountry,
       postalCode,
       products: cjProducts
     });
+    
+    console.log('📦 CJ freight API response:', quotes);
 
     // Convert USD to ZAR (approximate rate, update periodically)
     const USD_TO_ZAR = 19.0; // Updated exchange rate
