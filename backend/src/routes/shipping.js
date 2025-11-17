@@ -62,8 +62,8 @@ router.post('/quote', optionalAuth, async (req, res) => {
 
     // Call CJ freight calculator
     const quotes = await cjClient.getFreightQuote({
-      shippingCountryCode: shippingCountry,
-      fromCountryCode: 'CN', // All products ship from China
+      startCountryCode: 'CN', // All products ship from China
+      endCountryCode: shippingCountry,
       postalCode,
       products: cjProducts
     });
