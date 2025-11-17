@@ -64,7 +64,16 @@ router.get('/:id', async (req, res) => {
       return res.status(404).json({ error: 'Product not found' });
     }
 
-    res.json({ product: result.rows[0] });
+    const product = result.rows[0];
+    console.log(`📦 Product ${id} fetched:`, {
+      id: product.id,
+      name: product.product_name?.substring(0, 30),
+      cj_pid: product.cj_pid,
+      cj_vid: product.cj_vid,
+      has_cj_vid: !!product.cj_vid
+    });
+
+    res.json({ product: product });
   } catch (error) {
     console.error('Get product detail error:', error);
     res.status(500).json({ error: 'Failed to fetch product' });
