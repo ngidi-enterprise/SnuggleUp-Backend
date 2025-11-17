@@ -481,6 +481,8 @@ export const cjClient = {
       headers: { 'CJ-Access-Token': accessToken },
     });
 
+    console.log('🔍 CJ freightCalculate raw response:', JSON.stringify(json, null, 2));
+
     if (!json.result || !json.data) {
       throw new Error('CJ getFreightQuote failed: ' + (json.message || 'Unknown error'));
     }
