@@ -50,15 +50,23 @@ router.get('/', async (req, res) => {
 });
 
 // PUBLIC endpoint - Get single product details
+// Only supports lookup by database ID (not CJ PID for security/privacy)
 router.get('/:id', async (req, res) => {
   try {
     const { id } = req.params;
+    const numericId = isNaN(id) ? null : parseInt(id);
     
-    // Support lookup by database ID or CJ PID
+    // If not a valid numeric ID, return 404 (friendly "not found" instead of 400 error)
+    if (!numericId) {
+      console.log(`⚠️ Non-numeric product lookup attempted: ${id} (possibly CJ PID)`);
+      return res.status(404).json({ error: 'Product not found' });
+    }
+    
+    // Only lookup by database ID for customer-facing routes
     const result = await pool.query(`
       SELECT * FROM curated_products 
-      WHERE (id = $1 OR cj_pid = $2) AND is_active = TRUE
-    `, [isNaN(id) ? null : parseInt(id), id]);
+      WHERE id = $1 AND is_active = TRUE
+    `, [numericId]);
 
     if (result.rows.length === 0) {
       return res.status(404).json({ error: 'Product not found' });
