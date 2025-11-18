@@ -1,171 +1,125 @@
+import OpenAI from 'openai';
 
-import pkg from 'pg';
-const { Pool } = pkg;
+const OPENAI_API_KEY = process.env.OPENAI_API_KEY || '';
 
-// PostgreSQL connection config (supports Render DATABASE_URL and SSL)
-let pool;
-if (process.env.DATABASE_URL) {
-  pool = new Pool({
-    connectionString: process.env.DATABASE_URL,
-    ssl: process.env.PGSSLMODE === 'disable' ? false : { rejectUnauthorized: false },
-  });
-} else {
-  const baseConfig = {
-    user: process.env.PGUSER || 'postgres',
-    host: process.env.PGHOST || 'localhost',
-    database: process.env.PGDATABASE || 'snuggleup',
-    password: process.env.PGPASSWORD || 'postgres',
-    port: process.env.PGPORT ? parseInt(process.env.PGPORT) : 5432,
-  };
-  // Enable SSL if explicitly requested
-  if (process.env.PGSSLMODE === 'require') {
-    baseConfig.ssl = { rejectUnauthorized: false };
-  }
-  pool = new Pool(baseConfig);
+let openaiClient = null;
+
+// Initialize OpenAI client only if API key is available
+if (OPENAI_API_KEY) {
+  openaiClient = new OpenAI({ apiKey: OPENAI_API_KEY });
 }
 
-// Create tables if they don't exist
-async function initDb() {
-  await pool.query(`
-    CREATE TABLE IF NOT EXISTS users (
-      id SERIAL PRIMARY KEY,
-      email TEXT UNIQUE NOT NULL,
-      password TEXT NOT NULL,
-      name TEXT NOT NULL,
-      phone TEXT,
-        reset_token TEXT,
-        reset_token_expires TIMESTAMP,
-      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-    );
-  `);
+/**
+ * Generate SEO-optimized product titles for baby/kids products using AI
+ * @param {string} originalTitle - The original CJ product title
+ * @param {string} category - Product category
+ * @param {number} price - Product price in ZAR
+ * @returns {Promise<{suggestions: string[], reasoning: string}>}
+ */
+export async function generateSEOTitles(originalTitle, category = '', price = 0) {
+  if (!openaiClient) {
+    throw new Error('OpenAI API key not configured. Set OPENAI_API_KEY in environment variables.');
+  }
 
-  // Ensure reset columns exist even if the table was created before these fields were added
-  await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS reset_token TEXT;`);
-  await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS reset_token_expires TIMESTAMP;`);
+  const prompt = `You are an expert e-commerce SEO specialist for a South African baby products store called "SnuggleUp".
 
-  await pool.query(`
-    CREATE TABLE IF NOT EXISTS orders (
-      id SERIAL PRIMARY KEY,
-      user_id TEXT NOT NULL,
-      order_number TEXT UNIQUE NOT NULL,
-      items TEXT NOT NULL,
-      subtotal REAL NOT NULL,
-      shipping REAL NOT NULL,
-      discount REAL DEFAULT 0,
-      total REAL NOT NULL,
-      status TEXT DEFAULT 'pending',
-      payfast_payment_id TEXT,
-      payfast_signature TEXT,
-      customer_email TEXT,
-      shipping_country TEXT DEFAULT 'ZA',
-      shipping_method TEXT,
-      insurance_selected BOOLEAN DEFAULT FALSE,
-      insurance_cost REAL DEFAULT 0,
-      insurance_coverage REAL DEFAULT 0,
-      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-      updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-    );
-  `);
+Original product title: "${originalTitle}"
+Category: ${category || 'Baby/Kids'}
+Price: R ${price.toFixed(2)} ZAR
 
-  await pool.query(`CREATE INDEX IF NOT EXISTS idx_orders_user_id ON orders(user_id);`);
-  await pool.query(`CREATE INDEX IF NOT EXISTS idx_orders_status ON orders(status);`);
-  
-  // Ensure new order columns exist (idempotent adds for existing deployments)
-  await pool.query(`ALTER TABLE orders ADD COLUMN IF NOT EXISTS shipping_country TEXT DEFAULT 'ZA';`);
-  await pool.query(`ALTER TABLE orders ADD COLUMN IF NOT EXISTS shipping_method TEXT;`);
-  await pool.query(`ALTER TABLE orders ADD COLUMN IF NOT EXISTS insurance_selected BOOLEAN DEFAULT FALSE;`);
-  await pool.query(`ALTER TABLE orders ADD COLUMN IF NOT EXISTS insurance_cost REAL DEFAULT 0;`);
-  await pool.query(`ALTER TABLE orders ADD COLUMN IF NOT EXISTS insurance_coverage REAL DEFAULT 0;`);
-  
-  // Migration: Change user_id from INTEGER to TEXT for Supabase UUID compatibility
+Generate 3 SEO-optimized product titles that will:
+1. Increase conversion rates for South African parents shopping online
+2. Include relevant keywords parents search for (e.g., "baby", "kids", specific age ranges, features)
+3. Be compelling and clear (not clickbait)
+4. Stay under 70 characters for optimal Google Shopping display
+5. Include emotional/benefit words when appropriate (e.g., "soft", "safe", "comfortable", "premium")
+6. Avoid generic words like "high quality" - be specific about features
+
+Keep the core product identity but optimize for:
+- Search engine visibility (Google Shopping, organic search)
+- Parent concerns (safety, comfort, age-appropriate)
+- South African market (use "Mum/Mom", "Baby" conventions)
+- Mobile readability
+
+Format your response as JSON:
+{
+  "suggestions": ["title1", "title2", "title3"],
+  "reasoning": "Brief explanation of why these titles will perform better"
+}
+
+Be concise, specific, and parent-focused. Think about what a tired mom searching at midnight would type into Google.`;
+
   try {
-    await pool.query(`ALTER TABLE orders ALTER COLUMN user_id TYPE TEXT;`);
-    console.log('✅ Migrated orders.user_id to TEXT for Supabase UUIDs');
-  } catch (err) {
-    // Column might already be TEXT or migration already ran
-    console.log('ℹ️ orders.user_id migration skipped:', err.message);
+    const completion = await openaiClient.chat.completions.create({
+      model: 'gpt-4o-mini', // Fast and cost-effective
+      messages: [
+        {
+          role: 'system',
+          content: 'You are an expert e-commerce SEO specialist focused on baby products for the South African market. Respond only with valid JSON.'
+        },
+        {
+          role: 'user',
+          content: prompt
+        }
+      ],
+      temperature: 0.7, // Balanced creativity and consistency
+      max_tokens: 500,
+      response_format: { type: 'json_object' }
+    });
+
+    const result = JSON.parse(completion.choices[0].message.content);
+    
+    // Validate response structure
+    if (!result.suggestions || !Array.isArray(result.suggestions) || result.suggestions.length === 0) {
+      throw new Error('Invalid response from AI: missing suggestions array');
+    }
+
+    // Filter out any titles over 70 characters
+    const validSuggestions = result.suggestions
+      .filter(title => title && title.length <= 70)
+      .slice(0, 3);
+
+    if (validSuggestions.length === 0) {
+      throw new Error('AI generated titles were too long. Using original title.');
+    }
+
+    return {
+      suggestions: validSuggestions,
+      reasoning: result.reasoning || 'SEO-optimized titles for better discoverability'
+    };
+
+  } catch (error) {
+    console.error('SEO title generation error:', error);
+    
+    // Fallback: simple rule-based optimization
+    const fallbackTitle = optimizeTitleFallback(originalTitle);
+    return {
+      suggestions: [fallbackTitle, originalTitle],
+      reasoning: 'AI unavailable - using basic optimization'
+    };
   }
-
-  // Admin role column
-  await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS is_admin BOOLEAN DEFAULT FALSE;`);
-
-  // Curated products table - stores selected CJ products with custom pricing
-  await pool.query(`
-    CREATE TABLE IF NOT EXISTS curated_products (
-      id SERIAL PRIMARY KEY,
-      cj_pid TEXT UNIQUE NOT NULL,
-      cj_vid TEXT,
-      product_name TEXT NOT NULL,
-      product_description TEXT,
-      product_image TEXT,
-      cj_cost_price REAL NOT NULL,
-      suggested_price REAL NOT NULL,
-      custom_price REAL,
-      is_active BOOLEAN DEFAULT TRUE,
-      category TEXT,
-      stock_quantity INTEGER DEFAULT 0,
-      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-      updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-    );
-  `);
-
-  await pool.query(`CREATE INDEX IF NOT EXISTS idx_curated_products_active ON curated_products(is_active);`);
-  await pool.query(`CREATE INDEX IF NOT EXISTS idx_curated_products_category ON curated_products(category);`);
-
-  // Detailed per-warehouse inventory snapshots for curated products
-  await pool.query(`
-    CREATE TABLE IF NOT EXISTS curated_product_inventories (
-      id SERIAL PRIMARY KEY,
-      curated_product_id INTEGER NOT NULL REFERENCES curated_products(id) ON DELETE CASCADE,
-      cj_pid TEXT,
-      cj_vid TEXT,
-      warehouse_id TEXT,
-      warehouse_name TEXT,
-      country_code TEXT,
-      total_inventory INTEGER,
-      cj_inventory INTEGER,
-      factory_inventory INTEGER,
-      updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-    );
-  `);
-  await pool.query(`CREATE INDEX IF NOT EXISTS idx_curated_inv_curated_product_id ON curated_product_inventories(curated_product_id);`);
-  await pool.query(`CREATE INDEX IF NOT EXISTS idx_curated_inv_cj_vid ON curated_product_inventories(cj_vid);`);
-
-  // Inventory sync history - tracks each sync run with metadata
-  await pool.query(`
-    CREATE TABLE IF NOT EXISTS inventory_sync_history (
-      id SERIAL PRIMARY KEY,
-      started_at TIMESTAMP NOT NULL,
-      completed_at TIMESTAMP,
-      products_updated INTEGER DEFAULT 0,
-      products_failed INTEGER DEFAULT 0,
-      status TEXT DEFAULT 'running',
-      error_message TEXT,
-      sync_type TEXT DEFAULT 'scheduled',
-      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-    );
-  `);
-  await pool.query(`CREATE INDEX IF NOT EXISTS idx_sync_history_started_at ON inventory_sync_history(started_at DESC);`);
-  await pool.query(`CREATE INDEX IF NOT EXISTS idx_sync_history_status ON inventory_sync_history(status);`);
-
-  // Cart persistence table - stores user cart items
-  await pool.query(`
-    CREATE TABLE IF NOT EXISTS carts (
-      id SERIAL PRIMARY KEY,
-      user_id TEXT UNIQUE NOT NULL,
-      items JSONB NOT NULL DEFAULT '[]',
-      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-      updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-    );
-  `);
-
-  await pool.query(`CREATE INDEX IF NOT EXISTS idx_carts_user_id ON carts(user_id);`);
-  
-  console.log('✅ PostgreSQL database initialized successfully');
 }
 
-initDb().catch(err => {
-  console.error('PostgreSQL DB init error:', err);
-});
+/**
+ * Fallback title optimization using simple rules
+ */
+function optimizeTitleFallback(title) {
+  let optimized = title;
+  
+  // Capitalize first letter of each word
+  optimized = optimized.replace(/\b\w/g, char => char.toUpperCase());
+  
+  // Add "Baby" prefix if not present and title seems baby-related
+  if (!/baby|infant|toddler|kids/i.test(optimized)) {
+    optimized = 'Baby ' + optimized;
+  }
+  
+  // Trim to 70 characters
+  if (optimized.length > 70) {
+    optimized = optimized.substring(0, 67) + '...';
+  }
+  
+  return optimized;
+}
 
-export default pool;
+export default { generateSEOTitles };
