@@ -2,6 +2,7 @@ import express from 'express';
 import { requireAdmin } from '../middleware/admin.js';
 import pool from '../db.js';
 import { cjClient } from '../services/cjClient.js';
+import { generateSEOTitles } from '../services/seoTitleGenerator.js';
 
 export const router = express.Router();
 
@@ -120,7 +121,17 @@ router.get('/products', async (req, res) => {
 // Add product to curated list
 router.post('/products', async (req, res) => {
   try {
-    const { cj_pid, cj_vid, product_name, product_description, product_image, cj_cost_price, category } = req.body;
+    const { 
+      cj_pid, 
+      cj_vid, 
+      product_name, 
+      original_cj_title,
+      seo_title,
+      product_description, 
+      product_image, 
+      cj_cost_price, 
+      category 
+    } = req.body;
 
     if (!cj_pid || !product_name || !cj_cost_price) {
       return res.status(400).json({ error: 'Missing required fields' });
@@ -158,10 +169,10 @@ router.post('/products', async (req, res) => {
         // Insert product first to get the ID
         const result = await pool.query(`
           INSERT INTO curated_products 
-          (cj_pid, cj_vid, product_name, product_description, product_image, cj_cost_price, suggested_price, custom_price, category, stock_quantity)
-          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+          (cj_pid, cj_vid, product_name, original_cj_title, seo_title, product_description, product_image, cj_cost_price, suggested_price, custom_price, category, stock_quantity)
+          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
           RETURNING *
-        `, [cj_pid, resolvedVid, product_name, product_description, product_image, costPrice, suggested_price, suggested_price, category, stockQuantity]);
+        `, [cj_pid, resolvedVid, product_name, original_cj_title || product_name, seo_title, product_description, product_image, costPrice, suggested_price, suggested_price, category, stockQuantity]);
 
         const curatedProductId = result.rows[0].id;
 
@@ -193,10 +204,10 @@ router.post('/products', async (req, res) => {
     // Fallback: insert without inventory if we couldn't fetch it
     const result = await pool.query(`
       INSERT INTO curated_products 
-      (cj_pid, cj_vid, product_name, product_description, product_image, cj_cost_price, suggested_price, custom_price, category, stock_quantity)
-      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+      (cj_pid, cj_vid, product_name, original_cj_title, seo_title, product_description, product_image, cj_cost_price, suggested_price, custom_price, category, stock_quantity)
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
       RETURNING *
-    `, [cj_pid, resolvedVid, product_name, product_description, product_image, costPrice, suggested_price, suggested_price, category, stockQuantity]);
+    `, [cj_pid, resolvedVid, product_name, original_cj_title || product_name, seo_title, product_description, product_image, costPrice, suggested_price, suggested_price, category, stockQuantity]);
 
     res.status(201).json({ product: result.rows[0] });
   } catch (error) {
@@ -213,7 +224,18 @@ router.post('/products', async (req, res) => {
 router.put('/products/:id', async (req, res) => {
   try {
     const { id } = req.params;
-    const { custom_price, is_active, product_name, product_description, category, stock_quantity, cj_vid, cj_pid } = req.body;
+    const { 
+      custom_price, 
+      is_active, 
+      product_name, 
+      original_cj_title,
+      seo_title,
+      product_description, 
+      category, 
+      stock_quantity, 
+      cj_vid, 
+      cj_pid 
+    } = req.body;
 
     const updates = [];
     const values = [];
@@ -232,6 +254,16 @@ router.put('/products/:id', async (req, res) => {
     if (product_name !== undefined) {
       updates.push(`product_name = $${paramCount++}`);
       values.push(product_name);
+    }
+
+    if (original_cj_title !== undefined) {
+      updates.push(`original_cj_title = $${paramCount++}`);
+      values.push(original_cj_title);
+    }
+
+    if (seo_title !== undefined) {
+      updates.push(`seo_title = $${paramCount++}`);
+      values.push(seo_title);
     }
 
     if (product_description !== undefined) {
@@ -281,6 +313,32 @@ router.put('/products/:id', async (req, res) => {
   } catch (error) {
     console.error('Update product error:', error);
     res.status(500).json({ error: 'Failed to update product' });
+  }
+});
+
+// Generate SEO-optimized title suggestions using AI
+router.post('/products/generate-seo-title', async (req, res) => {
+  try {
+    const { originalTitle, category, price } = req.body;
+
+    if (!originalTitle) {
+      return res.status(400).json({ error: 'originalTitle is required' });
+    }
+
+    const result = await generateSEOTitles(
+      originalTitle,
+      category || '',
+      Number(price) || 0
+    );
+
+    res.json(result);
+  } catch (error) {
+    console.error('SEO title generation error:', error);
+    res.status(500).json({ 
+      error: error.message || 'Failed to generate SEO titles',
+      suggestions: [originalTitle], // Fallback to original
+      reasoning: 'Error occurred - using original title'
+    });
   }
 });
 
