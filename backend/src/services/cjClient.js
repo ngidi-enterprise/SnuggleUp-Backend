@@ -300,8 +300,14 @@ export const cjClient = {
       headers: { 'CJ-Access-Token': accessToken },
     });
 
+    console.log(`🔍 CJ getProductDetails response for ${pid}:`, {
+      result: json.result,
+      hasData: !!json.data,
+      message: json.message
+    });
+
     if (!json.result || !json.data) {
-      throw new Error('CJ getProductDetails failed: ' + (json.message || 'Unknown error'));
+      throw new Error(`CJ getProductDetails failed: ${json.message || 'Product not found'}: pid:${pid}`);
     }
 
     const product = json.data;
