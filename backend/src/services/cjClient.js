@@ -261,47 +261,43 @@ export const cjClient = {
     }).filter(it => {
       // Filter 1: China-sourced products only
       const isFromChina = it.originCountry === 'CN' || it.originCountry === null || it.originCountry === undefined;
-      
-      // Filter 2: Baby/Kids products only (case-insensitive match)
-      const isBabyCategory = it.categoryName && (
-        /toys.*kids.*babies/i.test(it.categoryName) ||
-        /baby/i.test(it.categoryName) ||
-        /kids/i.test(it.categoryName) ||
-        /children/i.test(it.categoryName) ||
-        /infant/i.test(it.categoryName) ||
-        /toddler/i.test(it.categoryName) ||
-        /\bboy\b/i.test(it.categoryName) ||
-        /\bgirl\b/i.test(it.categoryName) ||
-        /school/i.test(it.categoryName) ||
-        /electronic\s*pets?/i.test(it.categoryName) ||
-        /plush\s*animals?/i.test(it.categoryName) ||
-        /\banimals?\b/i.test(it.categoryName) ||
-        /\btoys?\b/i.test(it.categoryName) ||
-        /action/i.test(it.categoryName) ||
-        /maternity/i.test(it.categoryName) ||
-        /family/i.test(it.categoryName) ||
-        /mommy/i.test(it.categoryName) ||
-        /daddy/i.test(it.categoryName) ||
-        /baby\s*care/i.test(it.categoryName) ||
-        /mother/i.test(it.categoryName) ||
-        /baby\s*&\s*mother/i.test(it.categoryName) ||
-        /pregnancy/i.test(it.categoryName) ||
-        /baby\s*shower/i.test(it.categoryName) ||
-        /daddy\s*shower/i.test(it.categoryName) ||
-        /couch/i.test(it.categoryName) ||
-        /home\s*improvement/i.test(it.categoryName) ||
-        /entertainment/i.test(it.categoryName) ||
-        /\bhome\b/i.test(it.categoryName) ||
-        /dining\s*room/i.test(it.categoryName) ||
-        /furniture/i.test(it.categoryName)
+
+      // Normalize category name for robust matching
+      const cat = (it.categoryName || '').toLowerCase();
+
+      // Allow-list: Focus strictly on baby/kids
+      const allow = (
+        /baby/.test(cat) ||
+        /kid/.test(cat) ||
+        /children/.test(cat) ||
+        /child/.test(cat) ||
+        /infant/.test(cat) ||
+        /toddler/.test(cat) ||
+        /maternity/.test(cat) ||
+        /pregnan/.test(cat) ||
+        /nursery/.test(cat) ||
+        /stroller|pram/.test(cat) ||
+        /feeding|bottle|nappy|diaper|pacifier|teether/.test(cat) ||
+        /toy|plush|rattle|educational/.test(cat) ||
+        /school\s*supply|schoolbag|backpack/.test(cat)
       );
-      
-      // Log categories for debugging (only first few)
+
+      // Block-list: exclude irrelevant/expensive categories
+      const block = (
+        /pet|dogs?|cats?/.test(cat) ||
+        /furniture/.test(cat) ||
+        /home\s*improvement|hardware|tool/.test(cat) ||
+        /kitchen|dining\s*room|cook/.test(cat) ||
+        /garden|outdoor|auto|car|motor/.test(cat) ||
+        (/electronics?/.test(cat) && !/toy/.test(cat))
+      );
+
+      // Log a few categories for debugging
       if (rawList.indexOf(rawList.find(p => p.pid === it.pid)) < 3) {
-        console.log(`📂 Category check: "${it.categoryName}" - Baby/Kids: ${isBabyCategory}`);
+        console.log(`📂 Category check: "${it.categoryName}" allow:${allow} block:${block}`);
       }
-      
-      return isFromChina && isBabyCategory;
+
+      return isFromChina && allow && !block;
     });
 
     const result = {
