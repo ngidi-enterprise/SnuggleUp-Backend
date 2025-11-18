@@ -305,15 +305,41 @@ router.delete('/products/:id', async (req, res) => {
 });
 
 // Search supplier products (for adding to curated list)
+// Supports both name search and direct PID lookup
 router.get('/cj-products/search', async (req, res) => {
   try {
     const { q, pageNum, pageSize } = req.query;
-    const result = await cjClient.searchProducts({
-      productNameEn: q,
-      pageNum: pageNum ? Number(pageNum) : 1,
-      pageSize: pageSize ? Number(pageSize) : 20,
-    });
-    res.json(result);
+    
+    // Check if query looks like a CJ PID (starts with uppercase letters)
+    // CJ PIDs typically start with letters like "CJYE", "CJ", etc.
+    const isPidQuery = q && /^[A-Z]{2,}[0-9]/.test(q.trim());
+    
+    if (isPidQuery) {
+      // Direct PID lookup
+      console.log(`🔍 CJ PID lookup: ${q}`);
+      const result = await cjClient.getProductDetails(q.trim());
+      
+      // Format as search results array for consistency
+      if (result && result.data) {
+        res.json({
+          items: [result.data],
+          total: 1,
+          pageNum: 1,
+          pageSize: 1
+        });
+      } else {
+        res.json({ items: [], total: 0, pageNum: 1, pageSize: 20 });
+      }
+    } else {
+      // Name-based search
+      console.log(`🔍 CJ name search: ${q}`);
+      const result = await cjClient.searchProducts({
+        productNameEn: q,
+        pageNum: pageNum ? Number(pageNum) : 1,
+        pageSize: pageSize ? Number(pageSize) : 20,
+      });
+      res.json(result);
+    }
   } catch (error) {
     console.error('Supplier product search error:', error);
     res.status(502).json({ error: 'Supplier search failed', details: error.message });
@@ -329,6 +355,41 @@ router.get('/cj-products/:pid', async (req, res) => {
   } catch (error) {
     console.error('Supplier product details error:', error);
     res.status(502).json({ error: 'Supplier product details failed', details: error.message });
+  }
+});
+
+// Search curated products (by name, SKU/PID, or database ID)
+router.get('/products/search', async (req, res) => {
+  try {
+    const { q } = req.query;
+    
+    if (!q) {
+      return res.json({ products: [] });
+    }
+    
+    const searchTerm = `%${q}%`;
+    const numericId = isNaN(q) ? null : parseInt(q);
+    
+    // Search by: database ID, CJ PID, or product name
+    const result = await pool.query(`
+      SELECT * FROM curated_products 
+      WHERE id = $1 
+         OR cj_pid ILIKE $2 
+         OR product_name ILIKE $2
+      ORDER BY 
+        CASE 
+          WHEN id = $1 THEN 1
+          WHEN cj_pid ILIKE $2 THEN 2
+          ELSE 3
+        END,
+        created_at DESC
+      LIMIT 20
+    `, [numericId, searchTerm]);
+    
+    res.json({ products: result.rows });
+  } catch (error) {
+    console.error('Curated product search error:', error);
+    res.status(500).json({ error: 'Search failed', details: error.message });
   }
 });
 
