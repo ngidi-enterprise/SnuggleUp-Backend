@@ -284,7 +284,16 @@ export const cjClient = {
         /daddy/i.test(it.categoryName) ||
         /baby\s*care/i.test(it.categoryName) ||
         /mother/i.test(it.categoryName) ||
-        /baby\s*&\s*mother/i.test(it.categoryName)
+        /baby\s*&\s*mother/i.test(it.categoryName) ||
+        /pregnancy/i.test(it.categoryName) ||
+        /baby\s*shower/i.test(it.categoryName) ||
+        /daddy\s*shower/i.test(it.categoryName) ||
+        /couch/i.test(it.categoryName) ||
+        /home\s*improvement/i.test(it.categoryName) ||
+        /entertainment/i.test(it.categoryName) ||
+        /\bhome\b/i.test(it.categoryName) ||
+        /dining\s*room/i.test(it.categoryName) ||
+        /furniture/i.test(it.categoryName)
       );
       
       // Log categories for debugging (only first few)
