@@ -319,7 +319,7 @@ router.put('/products/:id', async (req, res) => {
 // Generate SEO-optimized title suggestions using AI
 router.post('/products/generate-seo-title', async (req, res) => {
   try {
-    const { originalTitle, category, price } = req.body;
+    const { originalTitle, category, price, pid } = req.body;
 
     if (!originalTitle) {
       return res.status(400).json({ error: 'originalTitle is required' });
@@ -328,7 +328,8 @@ router.post('/products/generate-seo-title', async (req, res) => {
     const result = await generateSEOTitles(
       originalTitle,
       category || '',
-      Number(price) || 0
+      Number(price) || 0,
+      pid || ''
     );
 
     res.json(result);
