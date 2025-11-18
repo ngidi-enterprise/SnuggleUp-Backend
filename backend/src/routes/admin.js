@@ -6,9 +6,9 @@ import { generateSEOTitles } from '../services/seoTitleGenerator.js';
 
 export const router = express.Router();
 
-// Pricing configuration
-const USD_TO_ZAR = Number(process.env.USD_TO_ZAR || process.env.EXCHANGE_USD_ZAR || 18.5);
-const PRICE_MARKUP = Number(process.env.PRICE_MARKUP || 2.0);
+// Currency conversion - frontend sends USD from CJ, we store ZAR
+const USD_TO_ZAR = parseFloat(process.env.USD_TO_ZAR) || 18.90;
+const PRICE_MARKUP = parseFloat(process.env.PRICE_MARKUP) || 2.0;
 
 // Lightweight request logger to aid production debugging
 router.use((req, _res, next) => {
@@ -142,15 +142,17 @@ router.post('/products', async (req, res) => {
     }
 
     // Validate price is a valid number
-    const costPrice = Number(cj_cost_price);
-    if (isNaN(costPrice) || costPrice <= 0) {
+    // Frontend sends USD price from CJ API - convert to ZAR for storage
+    const costUSD = Number(cj_cost_price);
+    if (isNaN(costUSD) || costUSD <= 0) {
       return res.status(400).json({ error: 'Invalid price: must be a positive number' });
     }
 
-    // Incoming cj_cost_price is from CJ API (USD). Convert to ZAR and apply markup for suggested retail.
-    const costUsd = costPrice;
-    const cj_cost_price_zar = Math.round(costUsd * USD_TO_ZAR * 100) / 100;
-    const suggested_price = Math.round(cj_cost_price_zar * PRICE_MARKUP * 100) / 100;
+    // Convert USD → ZAR and apply markup
+    const costZAR = Math.round(costUSD * USD_TO_ZAR * 100) / 100;
+    const suggested_price = Math.round(costZAR * PRICE_MARKUP * 100) / 100;
+
+    console.log(`💰 Price conversion: $${costUSD} USD → R${costZAR} ZAR (rate: ${USD_TO_ZAR}), suggested: R${suggested_price}`);
 
     // Fetch initial stock from CJ if we have a variant ID
     let stockQuantity = 0;
@@ -178,7 +180,7 @@ router.post('/products', async (req, res) => {
           (cj_pid, cj_vid, product_name, original_cj_title, seo_title, product_description, product_image, cj_cost_price, suggested_price, custom_price, category, stock_quantity)
           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
           RETURNING *
-        `, [cj_pid, resolvedVid, product_name, original_cj_title || product_name, seo_title, product_description, product_image, cj_cost_price_zar, suggested_price, suggested_price, category, stockQuantity]);
+        `, [cj_pid, resolvedVid, product_name, original_cj_title || product_name, seo_title, product_description, product_image, costZAR, suggested_price, suggested_price, category, stockQuantity]);
 
         const curatedProductId = result.rows[0].id;
 
@@ -213,7 +215,7 @@ router.post('/products', async (req, res) => {
       (cj_pid, cj_vid, product_name, original_cj_title, seo_title, product_description, product_image, cj_cost_price, suggested_price, custom_price, category, stock_quantity)
       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
       RETURNING *
-    `, [cj_pid, resolvedVid, product_name, original_cj_title || product_name, seo_title, product_description, product_image, cj_cost_price_zar, suggested_price, suggested_price, category, stockQuantity]);
+    `, [cj_pid, resolvedVid, product_name, original_cj_title || product_name, seo_title, product_description, product_image, costZAR, suggested_price, suggested_price, category, stockQuantity]);
 
     res.status(201).json({ product: result.rows[0] });
   } catch (error) {
