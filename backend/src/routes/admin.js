@@ -142,17 +142,16 @@ router.post('/products', async (req, res) => {
     }
 
     // Validate price is a valid number
-    // Frontend sends USD price from CJ API - convert to ZAR for storage
-    const costUSD = Number(cj_cost_price);
-    if (isNaN(costUSD) || costUSD <= 0) {
+    // Frontend already converts USD → ZAR, so we receive ZAR cost price
+    const costZAR = Number(cj_cost_price);
+    if (isNaN(costZAR) || costZAR <= 0) {
       return res.status(400).json({ error: 'Invalid price: must be a positive number' });
     }
 
-    // Convert USD → ZAR and apply markup
-    const costZAR = Math.round(costUSD * USD_TO_ZAR * 100) / 100;
+    // Apply markup to get suggested retail price
     const suggested_price = Math.round(costZAR * PRICE_MARKUP * 100) / 100;
 
-    console.log(`💰 Price conversion: $${costUSD} USD → R${costZAR} ZAR (rate: ${USD_TO_ZAR}), suggested: R${suggested_price}`);
+    console.log(`💰 Received cost: R${costZAR} ZAR, suggested retail: R${suggested_price} (${PRICE_MARKUP}x markup)`);
 
     // Fetch initial stock from CJ if we have a variant ID
     let stockQuantity = 0;
