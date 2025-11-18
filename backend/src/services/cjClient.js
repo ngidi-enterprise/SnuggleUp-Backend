@@ -259,9 +259,40 @@ export const cjClient = {
         originCountry,
       };
     }).filter(it => {
-      // Prefer explicit CN; if the field is absent (CJ sometimes omits it),
-      // keep the item because we already requested fromCountryCode=CN upstream.
-      return it.originCountry === 'CN' || it.originCountry === null || it.originCountry === undefined;
+      // Filter 1: China-sourced products only
+      const isFromChina = it.originCountry === 'CN' || it.originCountry === null || it.originCountry === undefined;
+      
+      // Filter 2: Baby/Kids products only (case-insensitive match)
+      const isBabyCategory = it.categoryName && (
+        /toys.*kids.*babies/i.test(it.categoryName) ||
+        /baby/i.test(it.categoryName) ||
+        /kids/i.test(it.categoryName) ||
+        /children/i.test(it.categoryName) ||
+        /infant/i.test(it.categoryName) ||
+        /toddler/i.test(it.categoryName) ||
+        /\bboy\b/i.test(it.categoryName) ||
+        /\bgirl\b/i.test(it.categoryName) ||
+        /school/i.test(it.categoryName) ||
+        /electronic\s*pets?/i.test(it.categoryName) ||
+        /plush\s*animals?/i.test(it.categoryName) ||
+        /\banimals?\b/i.test(it.categoryName) ||
+        /\btoys?\b/i.test(it.categoryName) ||
+        /action/i.test(it.categoryName) ||
+        /maternity/i.test(it.categoryName) ||
+        /family/i.test(it.categoryName) ||
+        /mommy/i.test(it.categoryName) ||
+        /daddy/i.test(it.categoryName) ||
+        /baby\s*care/i.test(it.categoryName) ||
+        /mother/i.test(it.categoryName) ||
+        /baby\s*&\s*mother/i.test(it.categoryName)
+      );
+      
+      // Log categories for debugging (only first few)
+      if (rawList.indexOf(rawList.find(p => p.pid === it.pid)) < 3) {
+        console.log(`📂 Category check: "${it.categoryName}" - Baby/Kids: ${isBabyCategory}`);
+      }
+      
+      return isFromChina && isBabyCategory;
     });
 
     const result = {
@@ -269,12 +300,13 @@ export const cjClient = {
       items,
       pageNum: json.data.pageNum,
       pageSize: json.data.pageSize,
-      // total reflects results after upstream CN filter and safety filter above
+      // total reflects results after upstream CN filter and category filter
       total: items.length,
       filtered: {
-        applied: 'fromCountryCode=CN (query) + originCountry==CN||missing (post-filter)',
+        applied: 'fromCountryCode=CN + baby/kids category only',
         originalTotal: json.data.total,
-        originalReturned: rawList.length
+        originalReturned: rawList.length,
+        afterFilter: items.length
       }
     };
     
