@@ -9,6 +9,39 @@ if (OPENAI_API_KEY) {
   openaiClient = new OpenAI({ apiKey: OPENAI_API_KEY });
 }
 
+// Simple in-memory cache for SEO title suggestions
+// Keyed by originalTitle|category|roundedPrice|pid (normalized)
+const seoCache = new Map();
+const SEO_CACHE_TTL_MS = 24 * 60 * 60 * 1000; // 24 hours
+const SEO_CACHE_MAX = 500; // cap to avoid unbounded growth
+
+function buildKey(originalTitle, category = '', price = 0, pid = '') {
+  const normTitle = String(originalTitle || '').trim().toLowerCase();
+  const normCat = String(category || '').trim().toLowerCase();
+  const roundPrice = Math.round(Number(price || 0));
+  const normPid = String(pid || '').trim().toUpperCase();
+  return `${normTitle}|${normCat}|${roundPrice}|${normPid}`;
+}
+
+function getFromCache(key) {
+  const hit = seoCache.get(key);
+  if (!hit) return null;
+  if (Date.now() - hit.timestamp > SEO_CACHE_TTL_MS) {
+    seoCache.delete(key);
+    return null;
+  }
+  return hit.data;
+}
+
+function setCache(key, data) {
+  // Trim cache if needed (naive LRU-ish by deleting first key)
+  if (seoCache.size >= SEO_CACHE_MAX) {
+    const firstKey = seoCache.keys().next().value;
+    if (firstKey) seoCache.delete(firstKey);
+  }
+  seoCache.set(key, { data, timestamp: Date.now() });
+}
+
 /**
  * Generate SEO-optimized product titles for baby/kids products using AI
  * @param {string} originalTitle - The original CJ product title
@@ -16,9 +49,21 @@ if (OPENAI_API_KEY) {
  * @param {number} price - Product price in ZAR
  * @returns {Promise<{suggestions: string[], reasoning: string}>}
  */
-export async function generateSEOTitles(originalTitle, category = '', price = 0) {
+export async function generateSEOTitles(originalTitle, category = '', price = 0, pid = '') {
+  // Check cache first to avoid duplicate costs
+  const key = buildKey(originalTitle, category, price, pid);
+  const cached = getFromCache(key);
+  if (cached) return cached;
+
   if (!openaiClient) {
-    throw new Error('OpenAI API key not configured. Set OPENAI_API_KEY in environment variables.');
+    // If AI not configured, fall back and cache the fallback
+    const fallbackTitle = optimizeTitleFallback(originalTitle);
+    const fallback = {
+      suggestions: [fallbackTitle, originalTitle].slice(0, 3),
+      reasoning: 'AI unavailable - using basic optimization'
+    };
+    setCache(key, fallback);
+    return fallback;
   }
 
   const prompt = `You are an expert e-commerce SEO specialist for a South African baby products store called "SnuggleUp".
@@ -83,20 +128,24 @@ Be concise, specific, and parent-focused. Think about what a tired mom searching
       throw new Error('AI generated titles were too long. Using original title.');
     }
 
-    return {
+    const payload = {
       suggestions: validSuggestions,
       reasoning: result.reasoning || 'SEO-optimized titles for better discoverability'
     };
+    setCache(key, payload);
+    return payload;
 
   } catch (error) {
     console.error('SEO title generation error:', error);
     
     // Fallback: simple rule-based optimization
     const fallbackTitle = optimizeTitleFallback(originalTitle);
-    return {
+    const payload = {
       suggestions: [fallbackTitle, originalTitle],
       reasoning: 'AI unavailable - using basic optimization'
     };
+    setCache(key, payload);
+    return payload;
   }
 }
 
