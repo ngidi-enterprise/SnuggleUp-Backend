@@ -6,6 +6,10 @@ import { generateSEOTitles } from '../services/seoTitleGenerator.js';
 
 export const router = express.Router();
 
+// Pricing configuration
+const USD_TO_ZAR = Number(process.env.USD_TO_ZAR || process.env.EXCHANGE_USD_ZAR || 18.5);
+const PRICE_MARKUP = Number(process.env.PRICE_MARKUP || 2.0);
+
 // Lightweight request logger to aid production debugging
 router.use((req, _res, next) => {
   try {
@@ -143,8 +147,10 @@ router.post('/products', async (req, res) => {
       return res.status(400).json({ error: 'Invalid price: must be a positive number' });
     }
 
-    // Calculate suggested price (2x markup)
-    const suggested_price = costPrice * 2;
+    // Incoming cj_cost_price is from CJ API (USD). Convert to ZAR and apply markup for suggested retail.
+    const costUsd = costPrice;
+    const cj_cost_price_zar = Math.round(costUsd * USD_TO_ZAR * 100) / 100;
+    const suggested_price = Math.round(cj_cost_price_zar * PRICE_MARKUP * 100) / 100;
 
     // Fetch initial stock from CJ if we have a variant ID
     let stockQuantity = 0;
@@ -172,7 +178,7 @@ router.post('/products', async (req, res) => {
           (cj_pid, cj_vid, product_name, original_cj_title, seo_title, product_description, product_image, cj_cost_price, suggested_price, custom_price, category, stock_quantity)
           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
           RETURNING *
-        `, [cj_pid, resolvedVid, product_name, original_cj_title || product_name, seo_title, product_description, product_image, costPrice, suggested_price, suggested_price, category, stockQuantity]);
+        `, [cj_pid, resolvedVid, product_name, original_cj_title || product_name, seo_title, product_description, product_image, cj_cost_price_zar, suggested_price, suggested_price, category, stockQuantity]);
 
         const curatedProductId = result.rows[0].id;
 
@@ -207,7 +213,7 @@ router.post('/products', async (req, res) => {
       (cj_pid, cj_vid, product_name, original_cj_title, seo_title, product_description, product_image, cj_cost_price, suggested_price, custom_price, category, stock_quantity)
       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
       RETURNING *
-    `, [cj_pid, resolvedVid, product_name, original_cj_title || product_name, seo_title, product_description, product_image, costPrice, suggested_price, suggested_price, category, stockQuantity]);
+    `, [cj_pid, resolvedVid, product_name, original_cj_title || product_name, seo_title, product_description, product_image, cj_cost_price_zar, suggested_price, suggested_price, category, stockQuantity]);
 
     res.status(201).json({ product: result.rows[0] });
   } catch (error) {
