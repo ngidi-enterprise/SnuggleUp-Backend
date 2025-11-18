@@ -310,7 +310,7 @@ router.get('/cj-products/search', async (req, res) => {
   try {
     const { q, pageNum, pageSize } = req.query;
     
-    // Check if query looks like a CJ PID (starts with uppercase letters)
+    // Check if query looks like a CJ PID/SKU (starts with uppercase letters)
     // CJ PIDs typically start with letters like "CJYE", "CJ", etc.
     const isPidQuery = q && /^[A-Z]{2,}[0-9]/.test(q.trim());
     
@@ -321,9 +321,16 @@ router.get('/cj-products/search', async (req, res) => {
         const result = await cjClient.getProductDetails(q.trim());
         
         // Format as search results array for consistency
-        if (result && result.data) {
+        if (result && result.pid) {
           res.json({
-            items: [result.data],
+            items: [{
+              pid: result.pid,
+              name: result.name,
+              price: result.price,
+              image: result.image,
+              category: result.categoryName,
+              variants: result.variants
+            }],
             total: 1,
             pageNum: 1,
             pageSize: 1
@@ -333,9 +340,22 @@ router.get('/cj-products/search', async (req, res) => {
           res.json({ items: [], total: 0, pageNum: 1, pageSize: 20 });
         }
       } catch (pidError) {
-        // PID lookup failed (product not found or invalid PID)
-        console.log(`⚠️ CJ PID not found: ${q}`, pidError.message);
-        res.json({ items: [], total: 0, pageNum: 1, pageSize: 20 });
+        // PID lookup failed - try searching by the SKU as a product name
+        console.log(`⚠️ CJ PID not found: ${q}, trying name search...`);
+        try {
+          const searchResult = await cjClient.searchProducts({
+            productNameEn: q,
+            pageNum: 1,
+            pageSize: 10,
+          });
+          
+          // Return search results (might find product by SKU in description/name)
+          res.json(searchResult);
+        } catch (searchError) {
+          // Both methods failed
+          console.log(`❌ CJ search also failed for: ${q}`);
+          res.json({ items: [], total: 0, pageNum: 1, pageSize: 20 });
+        }
       }
     } else {
       // Name-based search
