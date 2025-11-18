@@ -315,19 +315,26 @@ router.get('/cj-products/search', async (req, res) => {
     const isPidQuery = q && /^[A-Z]{2,}[0-9]/.test(q.trim());
     
     if (isPidQuery) {
-      // Direct PID lookup
+      // Direct PID lookup with error handling
       console.log(`🔍 CJ PID lookup: ${q}`);
-      const result = await cjClient.getProductDetails(q.trim());
-      
-      // Format as search results array for consistency
-      if (result && result.data) {
-        res.json({
-          items: [result.data],
-          total: 1,
-          pageNum: 1,
-          pageSize: 1
-        });
-      } else {
+      try {
+        const result = await cjClient.getProductDetails(q.trim());
+        
+        // Format as search results array for consistency
+        if (result && result.data) {
+          res.json({
+            items: [result.data],
+            total: 1,
+            pageNum: 1,
+            pageSize: 1
+          });
+        } else {
+          // Product details returned but no data
+          res.json({ items: [], total: 0, pageNum: 1, pageSize: 20 });
+        }
+      } catch (pidError) {
+        // PID lookup failed (product not found or invalid PID)
+        console.log(`⚠️ CJ PID not found: ${q}`, pidError.message);
         res.json({ items: [], total: 0, pageNum: 1, pageSize: 20 });
       }
     } else {
