@@ -265,39 +265,26 @@ export const cjClient = {
       // Normalize category name for robust matching
       const cat = (it.categoryName || '').toLowerCase();
 
-      // Allow-list: Focus strictly on baby/kids
-      const allow = (
-        /baby/.test(cat) ||
-        /kid/.test(cat) ||
-        /children/.test(cat) ||
-        /child/.test(cat) ||
-        /infant/.test(cat) ||
-        /toddler/.test(cat) ||
-        /maternity/.test(cat) ||
-        /pregnan/.test(cat) ||
-        /nursery/.test(cat) ||
-        /stroller|pram/.test(cat) ||
-        /feeding|bottle|nappy|diaper|pacifier|teether/.test(cat) ||
+      // Broader allow-list to include user's interests: pets, furniture, home improvement, etc.
+      const isRelevant = (
+        /baby|kid|children|child|infant|toddler|maternity|pregnan|nursery/.test(cat) ||
+        /stroller|pram|feeding|bottle|nappy|diaper|pacifier|teether/.test(cat) ||
         /toy|plush|rattle|educational/.test(cat) ||
-        /school\s*supply|schoolbag|backpack/.test(cat)
-      );
-
-      // Block-list: exclude irrelevant/expensive categories
-      const block = (
+        /school\s*supply|schoolbag|backpack/.test(cat) ||
         /pet|dogs?|cats?/.test(cat) ||
-        /furniture/.test(cat) ||
+        /furniture|couch|dining\s*room/.test(cat) ||
         /home\s*improvement|hardware|tool/.test(cat) ||
-        /kitchen|dining\s*room|cook/.test(cat) ||
-        /garden|outdoor|auto|car|motor/.test(cat) ||
-        (/electronics?/.test(cat) && !/toy/.test(cat))
+        /kitchen|cook/.test(cat) ||
+        /home\b|entertainment/.test(cat) ||
+        /garden|outdoor|auto|car|motor/.test(cat)
       );
 
       // Log a few categories for debugging
       if (rawList.indexOf(rawList.find(p => p.pid === it.pid)) < 3) {
-        console.log(`📂 Category check: "${it.categoryName}" allow:${allow} block:${block}`);
+        console.log(`📂 Category check: "${it.categoryName}" relevant:${isRelevant}`);
       }
 
-      return isFromChina && allow && !block;
+      return isFromChina && isRelevant;
     });
 
     const result = {
