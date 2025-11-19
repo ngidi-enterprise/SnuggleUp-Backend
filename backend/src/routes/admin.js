@@ -288,6 +288,16 @@ router.put('/products/:id', async (req, res) => {
       values.push(stock_quantity);
     }
 
+    // Allow correction of cost and suggested prices if explicitly passed
+    if (req.body.cj_cost_price !== undefined) {
+      updates.push(`cj_cost_price = $${paramCount++}`);
+      values.push(req.body.cj_cost_price);
+    }
+    if (req.body.suggested_price !== undefined) {
+      updates.push(`suggested_price = $${paramCount++}`);
+      values.push(req.body.suggested_price);
+    }
+
     if (cj_vid !== undefined) {
       updates.push(`cj_vid = $${paramCount++}`);
       values.push(cj_vid);
@@ -367,6 +377,74 @@ router.delete('/products/:id', async (req, res) => {
   } catch (error) {
     console.error('Delete product error:', error);
     res.status(500).json({ error: 'Failed to delete product' });
+  }
+});
+
+// Preview potentially inflated prices (admin-only)
+// GET /api/admin/products/inspect-inflated?threshold=500&rate=18.9
+router.get('/products/inspect-inflated', async (req, res) => {
+  try {
+    const threshold = Number(req.query.threshold || 500);
+    const rate = Number(req.query.rate || process.env.USD_TO_ZAR || 18.9);
+    if (!Number.isFinite(threshold) || !Number.isFinite(rate) || rate <= 0) {
+      return res.status(400).json({ error: 'Invalid threshold or rate' });
+    }
+    const result = await pool.query(
+      `SELECT id, product_name, cj_pid, cj_cost_price AS current_cost,
+              ROUND(cj_cost_price / $1, 2) AS corrected_cost,
+              suggested_price AS current_retail,
+              ROUND(suggested_price / $1, 2) AS corrected_retail,
+              custom_price AS current_custom,
+              ROUND(custom_price / $1, 2) AS corrected_custom
+       FROM curated_products
+       WHERE cj_cost_price > $2
+       ORDER BY id`,
+      [rate, threshold]
+    );
+    res.json({ rate, threshold, count: result.rows.length, items: result.rows });
+  } catch (error) {
+    console.error('Inspect inflated prices error:', error);
+    res.status(500).json({ error: 'Failed to inspect inflated prices' });
+  }
+});
+
+// Fix inflated prices (admin-only)
+// POST /api/admin/products/fix-inflated { threshold?: number, rate?: number }
+router.post('/products/fix-inflated', async (req, res) => {
+  const client = await pool.connect();
+  try {
+    const threshold = Number(req.body?.threshold || 500);
+    const rate = Number(req.body?.rate || process.env.USD_TO_ZAR || 18.9);
+    if (!Number.isFinite(threshold) || !Number.isFinite(rate) || rate <= 0) {
+      return res.status(400).json({ error: 'Invalid threshold or rate' });
+    }
+
+    await client.query('BEGIN');
+    const preview = await client.query(
+      `SELECT id, product_name, cj_pid, cj_cost_price, suggested_price, custom_price
+       FROM curated_products WHERE cj_cost_price > $1 ORDER BY id`,
+      [threshold]
+    );
+
+    const update = await client.query(
+      `UPDATE curated_products
+         SET cj_cost_price = ROUND(cj_cost_price / $1, 2),
+             suggested_price = ROUND(suggested_price / $1, 2),
+             custom_price = ROUND(custom_price / $1, 2),
+             updated_at = NOW()
+       WHERE cj_cost_price > $2
+       RETURNING id, product_name, cj_pid, cj_cost_price, suggested_price, custom_price`,
+      [rate, threshold]
+    );
+    await client.query('COMMIT');
+
+    res.json({ rate, threshold, fixed: update.rows.length, beforeSample: preview.rows.slice(0, 5), afterSample: update.rows.slice(0, 5) });
+  } catch (error) {
+    await client.query('ROLLBACK');
+    console.error('Fix inflated prices error:', error);
+    res.status(500).json({ error: 'Failed to fix inflated prices' });
+  } finally {
+    client.release();
   }
 });
 
