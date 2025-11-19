@@ -670,3 +670,63 @@ router.put('/users/:id/admin', async (req, res) => {
     res.status(500).json({ error: 'Failed to update user' });
   }
 });
+
+// ============ BULK PRODUCT ADMIN ============
+
+// Soft-disable all curated products (reversible)
+router.post('/products/bulk-deactivate', async (req, res) => {
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    const result = await client.query(`
+      UPDATE curated_products
+      SET is_active = false, updated_at = NOW()
+      WHERE is_active = true
+      RETURNING id
+    `);
+    await client.query('COMMIT');
+    res.json({ success: true, deactivated: result.rowCount });
+  } catch (error) {
+    await client.query('ROLLBACK');
+    console.error('Bulk deactivate products error:', error);
+    res.status(500).json({ error: 'Failed to deactivate products' });
+  } finally {
+    client.release();
+  }
+});
+
+// Hard-delete ALL curated products and their inventory records (irreversible)
+// Requires explicit confirmation: DELETE /api/admin/products?confirm=wipe
+router.delete('/products', async (req, res) => {
+  const confirm = (req.query.confirm || req.body?.confirm || '').toString().toLowerCase();
+  if (confirm !== 'wipe') {
+    return res.status(400).json({
+      error: "Refused: add query `confirm=wipe` to proceed",
+      note: 'This deletes all curated products and related inventory records. Use bulk-deactivate for a reversible option.'
+    });
+  }
+
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+
+    // Delete inventory rows first to avoid FK issues in some schemas
+    const invDel = await client.query(`
+      DELETE FROM curated_product_inventories
+    `);
+
+    const prodDel = await client.query(`
+      DELETE FROM curated_products
+      RETURNING id
+    `);
+
+    await client.query('COMMIT');
+    res.json({ success: true, deletedInventories: invDel.rowCount, deletedProducts: prodDel.rowCount });
+  } catch (error) {
+    await client.query('ROLLBACK');
+    console.error('Bulk delete curated products error:', error);
+    res.status(500).json({ error: 'Failed to delete curated products' });
+  } finally {
+    client.release();
+  }
+});
