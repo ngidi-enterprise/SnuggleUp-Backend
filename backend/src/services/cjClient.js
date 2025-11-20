@@ -269,12 +269,13 @@ export const cjClient = {
       items,
       pageNum: json.data.pageNum,
       pageSize: json.data.pageSize,
-      // total reflects results after upstream CN filter and safety filter above
+      // total reflects results after upstream CN filter and category filter
       total: items.length,
       filtered: {
-        applied: 'fromCountryCode=CN (query) + originCountry==CN||missing (post-filter)',
+        applied: 'fromCountryCode=CN + baby/kids category only',
         originalTotal: json.data.total,
-        originalReturned: rawList.length
+        originalReturned: rawList.length,
+        afterFilter: items.length
       }
     };
     
