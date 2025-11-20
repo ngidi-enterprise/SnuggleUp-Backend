@@ -238,7 +238,7 @@ export const cjClient = {
       console.log('📋 CJ Product API raw fields sample:', JSON.stringify(rawList[0], null, 2));
       console.log('🔍 Price field debug - sellPrice:', rawList[0].sellPrice, 'type:', typeof rawList[0].sellPrice);
     }
-    const items = rawList.map((p) => {
+    const items = rawList.map((p, index) => {
       // Attempt to derive the origin country from several possible CJ fields.
       // CJ product list responses may include one of these (field names vary between docs & envs):
       //  - fromCountryCode
@@ -265,7 +265,7 @@ export const cjClient = {
         priceUSD = parsed >= 100 && parsed === Math.floor(parsed) ? parsed / 100 : parsed;
       }
       
-      if (items.length < 3) { // Log first few for debugging
+      if (index < 3) { // Log first few for debugging
         console.log(`💲 Price conversion: raw=${rawPrice} → USD=$${priceUSD.toFixed(2)} for ${p.productNameEn?.substring(0, 40)}`);
       }
       
