@@ -251,6 +251,7 @@ export const cjClient = {
         sku: p.productSku,
         price: p.sellPrice,
         image: normalizeUrl(p.productImage),
+        description: p.description || p.productDescription || '', // Include description
         categoryId: p.categoryId,
         categoryName: p.categoryName,
         weight: p.productWeight,
