@@ -247,26 +247,43 @@ export const cjClient = {
       // If none are present we set originCountry to null.
       const originCountry = p.fromCountryCode || p.countryCode || p.sourceCountryCode || null;
       
-      // CJ prices: sellPrice might be in cents (need to divide by 100)
-      // Debug the raw value to confirm the format
+      // CJ prices: CJ returns string prices like "54.71" which are ALREADY in dollars
+      // If it's a string, parse it. If it's a number >= 100 with no decimals, it might be cents.
       const rawPrice = p.sellPrice;
-      // Smart detection: if price > 100 and looks like cents (e.g., 463, 4325), divide by 100
-      // If already in dollars format (e.g., 4.63, 43.25), use as-is
       let priceUSD;
-      if (typeof rawPrice === 'number') {
-        // Heuristic: if price >= 100 and has no decimals, likely in cents
+      
+      if (typeof rawPrice === 'string') {
+        // String format like "54.71" or "5471" - parse and check if it looks like cents
+        const parsed = parseFloat(rawPrice);
+        // If parsed value >= 100 AND original string has no decimal point, treat as cents
+        if (parsed >= 100 && !rawPrice.includes('.')) {
+          priceUSD = parsed / 100;
+          if (index < 3) {
+            console.log(`💲 String cents detected: "${rawPrice}" → $${priceUSD.toFixed(2)}`);
+          }
+        } else {
+          // Already in dollars
+          priceUSD = parsed;
+          if (index < 3) {
+            console.log(`💲 String dollars: "${rawPrice}" → $${priceUSD.toFixed(2)}`);
+          }
+        }
+      } else if (typeof rawPrice === 'number') {
+        // Number format: if >= 100 and no decimals, likely cents
         if (rawPrice >= 100 && rawPrice === Math.floor(rawPrice)) {
           priceUSD = rawPrice / 100;
+          if (index < 3) {
+            console.log(`💲 Number cents: ${rawPrice} → $${priceUSD.toFixed(2)}`);
+          }
         } else {
-          priceUSD = rawPrice; // Already in dollars
+          priceUSD = rawPrice;
+          if (index < 3) {
+            console.log(`💲 Number dollars: ${rawPrice} → $${priceUSD.toFixed(2)}`);
+          }
         }
       } else {
-        const parsed = parseFloat(rawPrice || 0);
-        priceUSD = parsed >= 100 && parsed === Math.floor(parsed) ? parsed / 100 : parsed;
-      }
-      
-      if (index < 3) { // Log first few for debugging
-        console.log(`💲 Price conversion: raw=${rawPrice} → USD=$${priceUSD.toFixed(2)} for ${p.productNameEn?.substring(0, 40)}`);
+        priceUSD = 0;
+        console.warn(`⚠️ Invalid price type for ${p.productNameEn}: ${typeof rawPrice}`);
       }
       
       return {
@@ -365,21 +382,32 @@ export const cjClient = {
       type: typeof product.sellPrice 
     });
     
-    // CJ prices: smart detection for cents vs dollars
+    // CJ prices: handle both string and number formats
     const rawPrice = product.sellPrice;
     let priceUSD;
-    if (typeof rawPrice === 'number') {
+    
+    if (typeof rawPrice === 'string') {
+      const parsed = parseFloat(rawPrice);
+      // If string has no decimal and value >= 100, treat as cents
+      if (parsed >= 100 && !rawPrice.includes('.')) {
+        priceUSD = parsed / 100;
+        console.log(`💲 String cents format: "${rawPrice}" → $${priceUSD.toFixed(2)}`);
+      } else {
+        priceUSD = parsed;
+        console.log(`💲 String dollars format: "${rawPrice}" → $${priceUSD.toFixed(2)}`);
+      }
+    } else if (typeof rawPrice === 'number') {
       // If >= 100 and no decimals, likely cents
       if (rawPrice >= 100 && rawPrice === Math.floor(rawPrice)) {
         priceUSD = rawPrice / 100;
-        console.log(`💲 Detected cents format: ${rawPrice} → $${priceUSD.toFixed(2)}`);
+        console.log(`💲 Number cents format: ${rawPrice} → $${priceUSD.toFixed(2)}`);
       } else {
         priceUSD = rawPrice;
-        console.log(`💲 Using as dollars: $${priceUSD.toFixed(2)}`);
+        console.log(`💲 Number dollars format: ${rawPrice} → $${priceUSD.toFixed(2)}`);
       }
     } else {
-      const parsed = parseFloat(rawPrice || 0);
-      priceUSD = parsed >= 100 && parsed === Math.floor(parsed) ? parsed / 100 : parsed;
+      priceUSD = 0;
+      console.warn(`⚠️ Invalid price type: ${typeof rawPrice}`);
     }
     
     return {
@@ -395,14 +423,22 @@ export const cjClient = {
       variants: (product.variants || []).map((v) => {
         const rawVariantPrice = v.variantSellPrice;
         let variantPriceUSD;
-        if (typeof rawVariantPrice === 'number') {
+        
+        if (typeof rawVariantPrice === 'string') {
+          const parsed = parseFloat(rawVariantPrice);
+          // String with no decimal and >= 100 = cents
+          variantPriceUSD = (parsed >= 100 && !rawVariantPrice.includes('.'))
+            ? parsed / 100
+            : parsed;
+        } else if (typeof rawVariantPrice === 'number') {
+          // Number >= 100 with no decimals = cents
           variantPriceUSD = (rawVariantPrice >= 100 && rawVariantPrice === Math.floor(rawVariantPrice))
             ? rawVariantPrice / 100
             : rawVariantPrice;
         } else {
-          const parsed = parseFloat(rawVariantPrice || 0);
-          variantPriceUSD = parsed >= 100 && parsed === Math.floor(parsed) ? parsed / 100 : parsed;
+          variantPriceUSD = 0;
         }
+        
         return {
           vid: v.vid,
           pid: v.pid,
