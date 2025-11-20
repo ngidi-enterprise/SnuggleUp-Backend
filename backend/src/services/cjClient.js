@@ -236,9 +236,8 @@ export const cjClient = {
     // Debug: log first product's raw structure to see all available fields
     if (rawList.length > 0) {
       console.log('📋 CJ Product API raw fields sample:', JSON.stringify(rawList[0], null, 2));
-      console.log('🔍 Price field debug - sellPrice:', rawList[0].sellPrice, 'type:', typeof rawList[0].sellPrice);
     }
-    const items = rawList.map((p, index) => {
+    const items = rawList.map((p) => {
       // Attempt to derive the origin country from several possible CJ fields.
       // CJ product list responses may include one of these (field names vary between docs & envs):
       //  - fromCountryCode
@@ -246,45 +245,11 @@ export const cjClient = {
       //  - sourceCountryCode
       // If none are present we set originCountry to null.
       const originCountry = p.fromCountryCode || p.countryCode || p.sourceCountryCode || null;
-      
-      // CJ prices: CJ API returns prices in CENTS as strings (e.g., "463" = $4.63)
-      const rawPrice = p.sellPrice;
-      let priceUSD;
-      
-      if (typeof rawPrice === 'string') {
-        // String format: CJ typically returns cents as strings like "463" for $4.63
-        const parsed = parseFloat(rawPrice);
-        if (isNaN(parsed)) {
-          priceUSD = 0;
-        } else if (!rawPrice.includes('.')) {
-          // No decimal point = cents format ("463" → $4.63)
-          priceUSD = parsed / 100;
-          if (index < 3) console.log(`💲 String cents: "${rawPrice}" → $${priceUSD.toFixed(2)}`);
-        } else {
-          // Has decimal = already dollars ("4.63" → $4.63)
-          priceUSD = parsed;
-          if (index < 3) console.log(`💲 String dollars: "${rawPrice}" → $${priceUSD.toFixed(2)}`);
-        }
-      } else if (typeof rawPrice === 'number') {
-        // Number format: if >= 10 and no decimals, likely cents
-        if (rawPrice >= 10 && rawPrice === Math.floor(rawPrice)) {
-          priceUSD = rawPrice / 100;
-          if (index < 3) console.log(`💲 Number cents: ${rawPrice} → $${priceUSD.toFixed(2)}`);
-        } else {
-          priceUSD = rawPrice;
-          if (index < 3) console.log(`💲 Number dollars: ${rawPrice} → $${priceUSD.toFixed(2)}`);
-        }
-      } else {
-        priceUSD = 0;
-        console.warn(`⚠️ Invalid price type: ${typeof rawPrice}`);
-      }
-      
       return {
         pid: p.pid,
         name: p.productNameEn,
         sku: p.productSku,
-        // Always return price in USD (never ZAR)
-        price: priceUSD, // USD only
+        price: p.sellPrice,
         image: normalizeUrl(p.productImage),
         categoryId: p.categoryId,
         categoryName: p.categoryName,
@@ -294,32 +259,9 @@ export const cjClient = {
         originCountry,
       };
     }).filter(it => {
-      // Filter 1: China-sourced products only
-      const isFromChina = it.originCountry === 'CN' || it.originCountry === null || it.originCountry === undefined;
-
-      // Normalize category name for robust matching
-      const cat = (it.categoryName || '').toLowerCase();
-
-      // Broader allow-list to include user's interests: pets, furniture, home improvement, etc.
-      const isRelevant = (
-        /baby|kid|children|child|infant|toddler|maternity|pregnan|nursery/.test(cat) ||
-        /stroller|pram|feeding|bottle|nappy|diaper|pacifier|teether/.test(cat) ||
-        /toy|plush|rattle|educational/.test(cat) ||
-        /school\s*supply|schoolbag|backpack/.test(cat) ||
-        /pet|dogs?|cats?/.test(cat) ||
-        /furniture|couch|dining\s*room/.test(cat) ||
-        /home\s*improvement|hardware|tool/.test(cat) ||
-        /kitchen|cook/.test(cat) ||
-        /home\b|entertainment/.test(cat) ||
-        /garden|outdoor|auto|car|motor/.test(cat)
-      );
-
-      // Log a few categories for debugging
-      if (rawList.indexOf(rawList.find(p => p.pid === it.pid)) < 3) {
-        console.log(`📂 Category check: "${it.categoryName}" relevant:${isRelevant}`);
-      }
-
-      return isFromChina && isRelevant;
+      // Prefer explicit CN; if the field is absent (CJ sometimes omits it),
+      // keep the item because we already requested fromCountryCode=CN upstream.
+      return it.originCountry === 'CN' || it.originCountry === null || it.originCountry === undefined;
     });
 
     const result = {
@@ -327,13 +269,12 @@ export const cjClient = {
       items,
       pageNum: json.data.pageNum,
       pageSize: json.data.pageSize,
-      // total reflects results after upstream CN filter and category filter
+      // total reflects results after upstream CN filter and safety filter above
       total: items.length,
       filtered: {
-        applied: 'fromCountryCode=CN + baby/kids category only',
+        applied: 'fromCountryCode=CN (query) + originCountry==CN||missing (post-filter)',
         originalTotal: json.data.total,
-        originalReturned: rawList.length,
-        afterFilter: items.length
+        originalReturned: rawList.length
       }
     };
     
@@ -370,84 +311,26 @@ export const cjClient = {
     }
 
     const product = json.data;
-    console.log(`🔍 Raw product price data:`, { 
-      pid: product.pid, 
-      sellPrice: product.sellPrice, 
-      type: typeof product.sellPrice 
-    });
-    
-    // CJ prices: handle cents format (strings like "463" = $4.63)
-    const rawPrice = product.sellPrice;
-    let priceUSD;
-    
-    if (typeof rawPrice === 'string') {
-      const parsed = parseFloat(rawPrice);
-      if (isNaN(parsed)) {
-        priceUSD = 0;
-      } else if (!rawPrice.includes('.')) {
-        priceUSD = parsed / 100; // "463" → $4.63
-        console.log(`💲 String cents: "${rawPrice}" → $${priceUSD.toFixed(2)}`);
-      } else {
-        priceUSD = parsed; // "4.63" → $4.63
-        console.log(`💲 String dollars: "${rawPrice}" → $${priceUSD.toFixed(2)}`);
-      }
-    } else if (typeof rawPrice === 'number') {
-      if (rawPrice >= 10 && rawPrice === Math.floor(rawPrice)) {
-        priceUSD = rawPrice / 100;
-        console.log(`💲 Number cents: ${rawPrice} → $${priceUSD.toFixed(2)}`);
-      } else {
-        priceUSD = rawPrice;
-        console.log(`💲 Number dollars: ${rawPrice} → $${priceUSD.toFixed(2)}`);
-      }
-    } else {
-      priceUSD = 0;
-      console.warn(`⚠️ Invalid price type: ${typeof rawPrice}`);
-    }
-    
     return {
       pid: product.pid,
       name: product.productNameEn,
       sku: product.productSku,
-      // Always return price in USD (never ZAR)
-      price: priceUSD, // USD only
+      price: product.sellPrice,
       image: normalizeUrl(product.productImage),
       description: product.description,
       weight: product.productWeight,
       categoryId: product.categoryId,
       categoryName: product.categoryName,
-      variants: (product.variants || []).map((v) => {
-        const rawVariantPrice = v.variantSellPrice;
-        let variantPriceUSD;
-        
-        if (typeof rawVariantPrice === 'string') {
-          const parsed = parseFloat(rawVariantPrice);
-          if (isNaN(parsed)) {
-            variantPriceUSD = 0;
-          } else if (!rawVariantPrice.includes('.')) {
-            variantPriceUSD = parsed / 100; // Cents format
-          } else {
-            variantPriceUSD = parsed; // Dollar format
-          }
-        } else if (typeof rawVariantPrice === 'number') {
-          variantPriceUSD = (rawVariantPrice >= 10 && rawVariantPrice === Math.floor(rawVariantPrice))
-            ? rawVariantPrice / 100
-            : rawVariantPrice;
-        } else {
-          variantPriceUSD = 0;
-        }
-        
-        return {
-          vid: v.vid,
-          pid: v.pid,
-          name: v.variantNameEn,
-          sku: v.variantSku,
-          // Always return price in USD (never ZAR)
-          price: variantPriceUSD, // USD only
-          image: normalizeUrl(v.variantImage),
-          weight: v.variantWeight,
-          key: v.variantKey,
-        };
-      }),
+      variants: (product.variants || []).map((v) => ({
+        vid: v.vid,
+        pid: v.pid,
+        name: v.variantNameEn,
+        sku: v.variantSku,
+        price: v.variantSellPrice,
+        image: normalizeUrl(v.variantImage),
+        weight: v.variantWeight,
+        key: v.variantKey,
+      })),
     };
   },
 
