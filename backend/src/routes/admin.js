@@ -512,7 +512,17 @@ router.get('/cj-products/search', async (req, res) => {
         pageNum: pageNum ? Number(pageNum) : 1,
         pageSize: pageSize ? Number(pageSize) : 20,
       });
-      res.json(result);
+      
+      // Normalize field names for frontend consistency
+      const normalizedItems = (result.items || []).map(item => ({
+        ...item,
+        category: item.categoryName || item.category || 'Baby/Kids'
+      }));
+      
+      res.json({
+        ...result,
+        items: normalizedItems
+      });
     }
   } catch (error) {
     console.error('Supplier product search error:', error);
