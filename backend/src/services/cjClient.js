@@ -283,7 +283,8 @@ export const cjClient = {
         pid: p.pid,
         name: p.productNameEn,
         sku: p.productSku,
-        price: priceUSD,
+        // Always return price in USD (never ZAR)
+        price: priceUSD, // USD only
         image: normalizeUrl(p.productImage),
         categoryId: p.categoryId,
         categoryName: p.categoryName,
@@ -407,7 +408,8 @@ export const cjClient = {
       pid: product.pid,
       name: product.productNameEn,
       sku: product.productSku,
-      price: priceUSD,
+      // Always return price in USD (never ZAR)
+      price: priceUSD, // USD only
       image: normalizeUrl(product.productImage),
       description: product.description,
       weight: product.productWeight,
@@ -439,7 +441,8 @@ export const cjClient = {
           pid: v.pid,
           name: v.variantNameEn,
           sku: v.variantSku,
-          price: variantPriceUSD,
+          // Always return price in USD (never ZAR)
+          price: variantPriceUSD, // USD only
           image: normalizeUrl(v.variantImage),
           weight: v.variantWeight,
           key: v.variantKey,
