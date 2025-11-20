@@ -133,7 +133,8 @@ router.post('/products', async (req, res) => {
       seo_title,
       product_description, 
       product_image, 
-      cj_cost_price, 
+      cj_cost_price,
+      custom_suggested_price, // Optional: custom retail price from frontend markup slider
       category 
     } = req.body;
 
@@ -148,10 +149,12 @@ router.post('/products', async (req, res) => {
       return res.status(400).json({ error: 'Invalid price: must be a positive number' });
     }
 
-    // Apply markup to get suggested retail price
-    const suggested_price = Math.round(costZAR * PRICE_MARKUP * 100) / 100;
+    // Use custom suggested price if provided, otherwise apply default markup
+    const suggested_price = custom_suggested_price 
+      ? Math.round(Number(custom_suggested_price) * 100) / 100
+      : Math.round(costZAR * PRICE_MARKUP * 100) / 100;
 
-    console.log(`💰 Received cost: R${costZAR} ZAR, suggested retail: R${suggested_price} (${PRICE_MARKUP}x markup)`);
+    console.log(`💰 Received cost: R${costZAR} ZAR, ${custom_suggested_price ? 'custom' : 'default'} retail: R${suggested_price} (${(suggested_price / costZAR).toFixed(2)}x markup)`);
 
     // Fetch initial stock from CJ if we have a variant ID
     let stockQuantity = 0;
