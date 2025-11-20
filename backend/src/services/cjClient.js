@@ -236,6 +236,7 @@ export const cjClient = {
     // Debug: log first product's raw structure to see all available fields
     if (rawList.length > 0) {
       console.log('📋 CJ Product API raw fields sample:', JSON.stringify(rawList[0], null, 2));
+      console.log('🔍 Price field debug - sellPrice:', rawList[0].sellPrice, 'type:', typeof rawList[0].sellPrice);
     }
     const items = rawList.map((p) => {
       // Attempt to derive the origin country from several possible CJ fields.
@@ -245,11 +246,34 @@ export const cjClient = {
       //  - sourceCountryCode
       // If none are present we set originCountry to null.
       const originCountry = p.fromCountryCode || p.countryCode || p.sourceCountryCode || null;
+      
+      // CJ prices: sellPrice might be in cents (need to divide by 100)
+      // Debug the raw value to confirm the format
+      const rawPrice = p.sellPrice;
+      // Smart detection: if price > 100 and looks like cents (e.g., 463, 4325), divide by 100
+      // If already in dollars format (e.g., 4.63, 43.25), use as-is
+      let priceUSD;
+      if (typeof rawPrice === 'number') {
+        // Heuristic: if price >= 100 and has no decimals, likely in cents
+        if (rawPrice >= 100 && rawPrice === Math.floor(rawPrice)) {
+          priceUSD = rawPrice / 100;
+        } else {
+          priceUSD = rawPrice; // Already in dollars
+        }
+      } else {
+        const parsed = parseFloat(rawPrice || 0);
+        priceUSD = parsed >= 100 && parsed === Math.floor(parsed) ? parsed / 100 : parsed;
+      }
+      
+      if (items.length < 3) { // Log first few for debugging
+        console.log(`💲 Price conversion: raw=${rawPrice} → USD=$${priceUSD.toFixed(2)} for ${p.productNameEn?.substring(0, 40)}`);
+      }
+      
       return {
         pid: p.pid,
         name: p.productNameEn,
         sku: p.productSku,
-        price: p.sellPrice,
+        price: priceUSD,
         image: normalizeUrl(p.productImage),
         categoryId: p.categoryId,
         categoryName: p.categoryName,
@@ -335,26 +359,61 @@ export const cjClient = {
     }
 
     const product = json.data;
+    console.log(`🔍 Raw product price data:`, { 
+      pid: product.pid, 
+      sellPrice: product.sellPrice, 
+      type: typeof product.sellPrice 
+    });
+    
+    // CJ prices: smart detection for cents vs dollars
+    const rawPrice = product.sellPrice;
+    let priceUSD;
+    if (typeof rawPrice === 'number') {
+      // If >= 100 and no decimals, likely cents
+      if (rawPrice >= 100 && rawPrice === Math.floor(rawPrice)) {
+        priceUSD = rawPrice / 100;
+        console.log(`💲 Detected cents format: ${rawPrice} → $${priceUSD.toFixed(2)}`);
+      } else {
+        priceUSD = rawPrice;
+        console.log(`💲 Using as dollars: $${priceUSD.toFixed(2)}`);
+      }
+    } else {
+      const parsed = parseFloat(rawPrice || 0);
+      priceUSD = parsed >= 100 && parsed === Math.floor(parsed) ? parsed / 100 : parsed;
+    }
+    
     return {
       pid: product.pid,
       name: product.productNameEn,
       sku: product.productSku,
-      price: product.sellPrice,
+      price: priceUSD,
       image: normalizeUrl(product.productImage),
       description: product.description,
       weight: product.productWeight,
       categoryId: product.categoryId,
       categoryName: product.categoryName,
-      variants: (product.variants || []).map((v) => ({
-        vid: v.vid,
-        pid: v.pid,
-        name: v.variantNameEn,
-        sku: v.variantSku,
-        price: v.variantSellPrice,
-        image: normalizeUrl(v.variantImage),
-        weight: v.variantWeight,
-        key: v.variantKey,
-      })),
+      variants: (product.variants || []).map((v) => {
+        const rawVariantPrice = v.variantSellPrice;
+        let variantPriceUSD;
+        if (typeof rawVariantPrice === 'number') {
+          variantPriceUSD = (rawVariantPrice >= 100 && rawVariantPrice === Math.floor(rawVariantPrice))
+            ? rawVariantPrice / 100
+            : rawVariantPrice;
+        } else {
+          const parsed = parseFloat(rawVariantPrice || 0);
+          variantPriceUSD = parsed >= 100 && parsed === Math.floor(parsed) ? parsed / 100 : parsed;
+        }
+        return {
+          vid: v.vid,
+          pid: v.pid,
+          name: v.variantNameEn,
+          sku: v.variantSku,
+          price: variantPriceUSD,
+          image: normalizeUrl(v.variantImage),
+          weight: v.variantWeight,
+          key: v.variantKey,
+        };
+      }),
     };
   },
 
