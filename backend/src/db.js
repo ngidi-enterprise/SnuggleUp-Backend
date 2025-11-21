@@ -131,7 +131,12 @@ async function initDb() {
   await pool.query(`
     ALTER TABLE curated_products 
     ADD COLUMN IF NOT EXISTS original_cj_title TEXT,
-    ADD COLUMN IF NOT EXISTS seo_title TEXT;
+    ADD COLUMN IF NOT EXISTS seo_title TEXT,
+    ADD COLUMN IF NOT EXISTS product_material TEXT,
+    ADD COLUMN IF NOT EXISTS product_features TEXT,
+    ADD COLUMN IF NOT EXISTS package_size TEXT,
+    ADD COLUMN IF NOT EXISTS packing_list TEXT,
+    ADD COLUMN IF NOT EXISTS product_weight TEXT;
   `);
 
   // Detailed per-warehouse inventory snapshots for curated products
