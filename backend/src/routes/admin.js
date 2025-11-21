@@ -131,7 +131,12 @@ router.post('/products', async (req, res) => {
       product_name, 
       original_cj_title,
       seo_title,
-      product_description, 
+      product_description,
+      product_material,
+      product_features,
+      package_size,
+      packing_list,
+      product_weight,
       product_image, 
       cj_cost_price,
       custom_suggested_price, // Optional: custom retail price from frontend markup slider
@@ -179,10 +184,10 @@ router.post('/products', async (req, res) => {
         // Insert product first to get the ID
         const result = await pool.query(`
           INSERT INTO curated_products 
-          (cj_pid, cj_vid, product_name, original_cj_title, seo_title, product_description, product_image, cj_cost_price, suggested_price, custom_price, category, stock_quantity)
-          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+          (cj_pid, cj_vid, product_name, original_cj_title, seo_title, product_description, product_material, product_features, package_size, packing_list, product_weight, product_image, cj_cost_price, suggested_price, custom_price, category, stock_quantity)
+          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)
           RETURNING *
-        `, [cj_pid, resolvedVid, product_name, original_cj_title || product_name, seo_title, product_description, product_image, costZAR, suggested_price, suggested_price, category, stockQuantity]);
+        `, [cj_pid, resolvedVid, product_name, original_cj_title || product_name, seo_title, product_description, product_material, product_features, package_size, packing_list, product_weight, product_image, costZAR, suggested_price, suggested_price, category, stockQuantity]);
 
         const curatedProductId = result.rows[0].id;
 
@@ -214,10 +219,10 @@ router.post('/products', async (req, res) => {
     // Fallback: insert without inventory if we couldn't fetch it
     const result = await pool.query(`
       INSERT INTO curated_products 
-      (cj_pid, cj_vid, product_name, original_cj_title, seo_title, product_description, product_image, cj_cost_price, suggested_price, custom_price, category, stock_quantity)
-      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+      (cj_pid, cj_vid, product_name, original_cj_title, seo_title, product_description, product_material, product_features, package_size, packing_list, product_weight, product_image, cj_cost_price, suggested_price, custom_price, category, stock_quantity)
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)
       RETURNING *
-    `, [cj_pid, resolvedVid, product_name, original_cj_title || product_name, seo_title, product_description, product_image, costZAR, suggested_price, suggested_price, category, stockQuantity]);
+    `, [cj_pid, resolvedVid, product_name, original_cj_title || product_name, seo_title, product_description, product_material, product_features, package_size, packing_list, product_weight, product_image, costZAR, suggested_price, suggested_price, category, stockQuantity]);
 
     res.status(201).json({ product: result.rows[0] });
   } catch (error) {
