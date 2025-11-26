@@ -138,6 +138,20 @@ export const getOrderById = async (orderId) => {
   }
 };
 
+// Get order by order_number
+export const getOrderByNumber = async (orderNumber) => {
+  try {
+    const result = await db.query(`SELECT * FROM orders WHERE order_number = $1`, [orderNumber]);
+    if (result.rows.length === 0) return null;
+    const order = result.rows[0];
+    try { order.items = JSON.parse(order.items); } catch {}
+    return order;
+  } catch (error) {
+    console.error('Get order by number error:', error);
+    throw error;
+  }
+};
+
 // Update order with CJ info after submission
 export const updateOrderCJInfo = async (orderId, cjOrderId, cjOrderNumber, cjStatus) => {
   try {
