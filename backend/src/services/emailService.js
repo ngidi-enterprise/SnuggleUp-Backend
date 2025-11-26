@@ -162,8 +162,9 @@ This is an automated message, please do not reply to this email.
  * @param {string} options.orderNumber - Order number
  * @param {number} options.totalAmount - Total order amount in ZAR
  * @param {Array} options.items - Order items
+ * @param {string} [options.customerName] - Customer name for personalized greeting
  */
-export const sendOrderConfirmationEmail = async ({ to, orderNumber, totalAmount, items }) => {
+export const sendOrderConfirmationEmail = async ({ to, orderNumber, totalAmount, items, customerName }) => {
   const transporter = createTransporter();
   
   if (!transporter) {
@@ -197,7 +198,7 @@ export const sendOrderConfirmationEmail = async ({ to, orderNumber, totalAmount,
       <h1>✅ Order Confirmed!</h1>
     </div>
     <div class="content">
-      <p>Hi there,</p>
+      <p>Hi ${customerName ? customerName + ',' : 'there,'}</p>
       <p>Thank you for your order! We've received your payment and are processing your order.</p>
       
       <div class="info-box">
