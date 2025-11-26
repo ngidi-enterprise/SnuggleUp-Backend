@@ -75,15 +75,38 @@ router.post('/quote', optionalAuth, async (req, res) => {
       products: cjProducts
     });
     
-    console.log('📦 CJ freight API response:', quotes);
+    console.log('📦 CJ freight API response:', JSON.stringify(quotes, null, 2));
 
     // Convert USD to ZAR (approximate rate, update periodically)
     const USD_TO_ZAR = 19.0; // Updated exchange rate
-    const quotesWithZAR = quotes.map(q => ({
-      ...q,
-      priceZAR: Math.ceil(q.totalPostage * USD_TO_ZAR * 100) / 100, // Round to 2 decimals
-      priceUSD: q.totalPostage
-    }));
+
+    // Intelligent fallback based on cart subtotal (orderValue)
+    const computeFallbackShipping = (subtotal) => {
+      const v = Number(subtotal || 0);
+      if (v <= 0) return 250; // default minimal fallback when subtotal missing
+      if (v < 500) return 250;
+      if (v < 1000) return 350;
+      if (v < 2000) return 500;
+      if (v < 4000) return 650;
+      // Over R4000: R650 + R100 per additional R1000 (rounded down)
+      const extraBlocks = Math.floor((v - 4000) / 1000);
+      return 650 + (extraBlocks * 100);
+    };
+
+    const quotesWithZAR = quotes.map(q => {
+      const priceUSD = Number(q.totalPostage || 0);
+      let priceZAR = Math.ceil(priceUSD * USD_TO_ZAR * 100) / 100;
+
+      // If CJ returns 0 or very low price, use intelligent subtotal-based fallback
+      if (priceZAR < 10) {
+        const fallback = computeFallbackShipping(orderValue);
+        console.warn(`⚠️ CJ returned low/zero shipping cost (${priceZAR} ZAR). Using fallback based on subtotal R${orderValue}: R${fallback}`);
+        priceZAR = fallback;
+        return { ...q, priceZAR, priceUSD, isFallback: true };
+      }
+
+      return { ...q, priceZAR, priceUSD, isFallback: false };
+    });
 
     // Calculate insurance cost (3% of order value, min R25, max R500)
     const insuranceData = orderValue ? {
