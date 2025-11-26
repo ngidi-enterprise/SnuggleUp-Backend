@@ -28,7 +28,8 @@ router.post('/create', optionalAuth, async (req, res) => {
       shippingMethod, 
       shippingQuoted,
       shippingCountry,
-      insurance 
+      insurance,
+      shippingDetails
     } = req.body;
     
     console.log('💰 Creating PayFast payment:', { 
@@ -60,7 +61,8 @@ router.post('/create', optionalAuth, async (req, res) => {
         email,
         shippingCountry,
         shippingMethod,
-        insurance
+        insurance,
+        shippingDetails
       });
       console.log('✅ Order created:', orderNumber);
     } catch (orderError) {
