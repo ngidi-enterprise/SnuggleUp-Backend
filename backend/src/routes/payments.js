@@ -211,17 +211,26 @@ router.post('/notify', async (req, res) => {
     if (signaturesMatch && validationOk) {
       if (paymentStatus === 'COMPLETE') {
         await updateOrderStatus(orderNumber, 'paid', payfastPaymentId);
-        // Send order confirmation email (best-effort)
+        // Send order confirmation email (best-effort, once only)
         try {
           const order = await getOrderByNumber(orderNumber);
-          if (order && order.customer_email) {
+          if (order && order.customer_email && !order.sent_confirmation) {
             const items = Array.isArray(order.items) ? order.items : [];
-            await sendOrderConfirmationEmail({
+            const emailResult = await sendOrderConfirmationEmail({
               to: order.customer_email,
               orderNumber: order.order_number,
               totalAmount: order.total,
-              items
+              items,
+              customerName: order.customer_name
             });
+            // Mark email as sent to prevent duplicates on IPN retries
+            if (emailResult.success) {
+              const pool = (await import('../db.js')).default;
+              await pool.query(
+                'UPDATE orders SET sent_confirmation = TRUE WHERE order_number = $1',
+                [orderNumber]
+              );
+            }
           }
         } catch (e) {
           console.warn('Order confirmation email failed:', e.message);
