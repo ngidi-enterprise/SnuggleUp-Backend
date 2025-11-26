@@ -90,6 +90,14 @@ async function initDb() {
   await pool.query(`ALTER TABLE orders ADD COLUMN IF NOT EXISTS insurance_cost REAL DEFAULT 0;`);
   await pool.query(`ALTER TABLE orders ADD COLUMN IF NOT EXISTS insurance_coverage REAL DEFAULT 0;`);
   
+  // CJ Dropshipping order tracking columns
+  await pool.query(`ALTER TABLE orders ADD COLUMN IF NOT EXISTS cj_order_id TEXT;`);
+  await pool.query(`ALTER TABLE orders ADD COLUMN IF NOT EXISTS cj_order_number TEXT;`);
+  await pool.query(`ALTER TABLE orders ADD COLUMN IF NOT EXISTS cj_tracking_number TEXT;`);
+  await pool.query(`ALTER TABLE orders ADD COLUMN IF NOT EXISTS cj_tracking_url TEXT;`);
+  await pool.query(`ALTER TABLE orders ADD COLUMN IF NOT EXISTS cj_submitted_at TIMESTAMP;`);
+  await pool.query(`ALTER TABLE orders ADD COLUMN IF NOT EXISTS cj_status TEXT;`);
+  
   // Migration: Change user_id from INTEGER to TEXT for Supabase UUID compatibility
   try {
     await pool.query(`ALTER TABLE orders ALTER COLUMN user_id TYPE TEXT;`);
