@@ -112,3 +112,85 @@ export const updateOrderStatus = async (orderNumber, status, payfastPaymentId) =
     throw error;
   }
 };
+
+// Get order by ID (for CJ submission)
+export const getOrderById = async (orderId) => {
+  try {
+    const result = await db.query(`SELECT * FROM orders WHERE id = $1`, [orderId]);
+    if (result.rows.length === 0) {
+      return null;
+    }
+    const order = result.rows[0];
+    order.items = JSON.parse(order.items);
+    return order;
+  } catch (error) {
+    console.error('Get order by ID error:', error);
+    throw error;
+  }
+};
+
+// Update order with CJ info after submission
+export const updateOrderCJInfo = async (orderId, cjOrderId, cjOrderNumber, cjStatus) => {
+  try {
+    await db.query(
+      `UPDATE orders SET cj_order_id = $1, cj_order_number = $2, cj_status = $3, cj_submitted_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP WHERE id = $4`,
+      [cjOrderId, cjOrderNumber, cjStatus || 'SUBMITTED', orderId]
+    );
+    return true;
+  } catch (error) {
+    console.error('Update order CJ info error:', error);
+    throw error;
+  }
+};
+
+// Update order tracking info from CJ webhook
+export const updateOrderTracking = async (cjOrderId, trackingNumber, trackingUrl) => {
+  try {
+    await db.query(
+      `UPDATE orders SET cj_tracking_number = $1, cj_tracking_url = $2, cj_status = 'SHIPPED', updated_at = CURRENT_TIMESTAMP WHERE cj_order_id = $3`,
+      [trackingNumber, trackingUrl, cjOrderId]
+    );
+    return true;
+  } catch (error) {
+    console.error('Update order tracking error:', error);
+    throw error;
+  }
+};
+
+// Helper: Build CJ order data from local order
+export const buildCJOrderData = (order) => {
+  // Extract shipping info from order (you may need to add these fields to your orders table)
+  // For now, using placeholder data - you'll need to collect this during checkout
+  const shippingInfo = {
+    customerName: order.customer_name || 'Customer Name', // Add to checkout form
+    address: order.shipping_address || 'Address Line 1', // Add to checkout form
+    city: order.shipping_city || 'Johannesburg', // Add to checkout form
+    province: order.shipping_province || 'Gauteng', // Add to checkout form
+    postalCode: order.shipping_postal_code || '2196', // Add to checkout form
+    phone: order.shipping_phone || '0821234567', // Add to checkout form
+  };
+
+  return {
+    orderNumber: order.order_number,
+    shippingCountryCode: order.shipping_country || 'ZA',
+    shippingCountry: 'South Africa',
+    shippingProvince: shippingInfo.province,
+    shippingCity: shippingInfo.city,
+    shippingCustomerName: shippingInfo.customerName,
+    shippingAddress: shippingInfo.address,
+    shippingPhone: shippingInfo.phone,
+    shippingZip: shippingInfo.postalCode,
+    email: order.customer_email,
+    logisticName: order.shipping_method || 'USPS+',
+    fromCountryCode: 'CN',
+    payType: 2, // Balance payment
+    products: order.items
+      .filter(item => item.cj_vid) // Only include CJ products
+      .map(item => ({
+        vid: item.cj_vid,
+        quantity: item.quantity
+      })),
+    remark: `SnuggleUp Order ${order.order_number}`
+  };
+};
+
