@@ -3,6 +3,7 @@ import { authenticateToken } from '../middleware/auth.js';
 import { cjClient } from '../services/cjClient.js';
 import { requireAdmin } from '../middleware/admin.js';
 import { syncCuratedInventory, getCuratedInventorySnapshot } from '../services/inventorySync.js';
+import { updateOrderTracking } from './orders.js';
 import pool from '../db.js';
 
 export const router = express.Router();
@@ -212,15 +213,68 @@ router.post('/webhook', express.json({ type: 'application/json' }), async (req, 
 
     const valid = cjClient.verifyWebhook({ signature, timestamp }, req.body);
     if (!valid) {
+      console.warn('⚠️ Invalid CJ webhook signature');
       return res.status(401).json({ error: 'Invalid CJ webhook signature' });
     }
 
     // Log webhook for debugging
     console.log('📦 CJ Webhook received:', JSON.stringify(req.body, null, 2));
 
-    // TODO: Process webhook data (update order status, tracking in your database)
-    // Webhook types: order, logistics, stock, product
-    // Example: Update order tracking number when CJ ships the order
+    // Process webhook data based on event type
+    const { eventType, data } = req.body;
+
+    if (eventType === 'logistics' || eventType === 'order_shipped') {
+      // Extract tracking information
+      const cjOrderId = data?.orderId || data?.orderNumber;
+      const trackingNumber = data?.trackingNumber || data?.logisticsNumber;
+      const trackingUrl = data?.trackingUrl || data?.trackingLink;
+
+      if (cjOrderId && trackingNumber) {
+        console.log(`📬 Updating tracking for CJ order ${cjOrderId}: ${trackingNumber}`);
+        
+        // Update order in database
+        await updateOrderTracking(cjOrderId, trackingNumber, trackingUrl || '');
+        
+        // TODO: Send customer email notification with tracking info
+        // This would require setting up an email service (e.g., SendGrid, AWS SES)
+        // Example implementation:
+        /*
+        const orderResult = await pool.query(
+          'SELECT customer_email, order_number FROM orders WHERE cj_order_id = $1',
+          [cjOrderId]
+        );
+        
+        if (orderResult.rows.length > 0) {
+          const order = orderResult.rows[0];
+          await sendTrackingEmail({
+            to: order.customer_email,
+            orderNumber: order.order_number,
+            trackingNumber,
+            trackingUrl
+          });
+        }
+        */
+        
+        console.log(`✅ Tracking updated for CJ order ${cjOrderId}`);
+      } else {
+        console.warn('⚠️ Webhook missing tracking information:', { cjOrderId, trackingNumber });
+      }
+    } else if (eventType === 'order_status') {
+      // Handle order status updates
+      const cjOrderId = data?.orderId;
+      const status = data?.status;
+      
+      if (cjOrderId && status) {
+        console.log(`📋 Updating status for CJ order ${cjOrderId}: ${status}`);
+        await pool.query(
+          'UPDATE orders SET cj_status = $1, updated_at = CURRENT_TIMESTAMP WHERE cj_order_id = $2',
+          [status, cjOrderId]
+        );
+        console.log(`✅ Status updated for CJ order ${cjOrderId}`);
+      }
+    } else {
+      console.log(`ℹ️ Unhandled webhook type: ${eventType}`);
+    }
 
     res.status(200).json({ received: true });
   } catch (err) {
