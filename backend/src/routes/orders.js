@@ -67,15 +67,18 @@ export const createOrder = async (userId, orderData) => {
       email,
       shippingCountry,
       shippingMethod,
-      insurance
+      insurance,
+      shippingDetails
     } = orderData;
     
     const result = await db.query(
       `INSERT INTO orders (
         user_id, order_number, items, subtotal, shipping, discount, total, customer_email, 
-        shipping_country, shipping_method, insurance_selected, insurance_cost, insurance_coverage, status
+        shipping_country, shipping_method, insurance_selected, insurance_cost, insurance_coverage, 
+        customer_name, shipping_address, shipping_city, shipping_province, shipping_postal_code, shipping_phone,
+        status
       )
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, 'pending') RETURNING id`,
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, 'pending') RETURNING id`,
       [
         userId,
         orderNumber,
@@ -89,7 +92,13 @@ export const createOrder = async (userId, orderData) => {
         shippingMethod || 'STANDARD',
         insurance?.selected || false,
         insurance?.cost || 0,
-        insurance?.coverage || 0
+        insurance?.coverage || 0,
+        shippingDetails?.customerName || null,
+        shippingDetails?.address || null,
+        shippingDetails?.city || null,
+        shippingDetails?.province || null,
+        shippingDetails?.postalCode || null,
+        shippingDetails?.phone || null
       ]
     );
     return result.rows[0].id;
@@ -159,15 +168,14 @@ export const updateOrderTracking = async (cjOrderId, trackingNumber, trackingUrl
 
 // Helper: Build CJ order data from local order
 export const buildCJOrderData = (order) => {
-  // Extract shipping info from order (you may need to add these fields to your orders table)
-  // For now, using placeholder data - you'll need to collect this during checkout
+  // Extract shipping info from order - now using real data from database!
   const shippingInfo = {
-    customerName: order.customer_name || 'Customer Name', // Add to checkout form
-    address: order.shipping_address || 'Address Line 1', // Add to checkout form
-    city: order.shipping_city || 'Johannesburg', // Add to checkout form
-    province: order.shipping_province || 'Gauteng', // Add to checkout form
-    postalCode: order.shipping_postal_code || '2196', // Add to checkout form
-    phone: order.shipping_phone || '0821234567', // Add to checkout form
+    customerName: order.customer_name || 'Customer Name',
+    address: order.shipping_address || 'Address Line 1',
+    city: order.shipping_city || 'Johannesburg',
+    province: order.shipping_province || 'Gauteng',
+    postalCode: order.shipping_postal_code || '2196',
+    phone: order.shipping_phone || '0821234567',
   };
 
   return {
