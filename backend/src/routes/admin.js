@@ -3,6 +3,7 @@ import { requireAdmin } from '../middleware/admin.js';
 import pool from '../db.js';
 import { cjClient } from '../services/cjClient.js';
 import { generateSEOTitles } from '../services/seoTitleGenerator.js';
+import { getOrderById, buildCJOrderData, updateOrderCJInfo } from './orders.js';
 
 export const router = express.Router();
 
@@ -738,6 +739,7 @@ router.delete('/products', async (req, res) => {
       RETURNING id
     `);
 
+
     await client.query('COMMIT');
     res.json({ success: true, deletedInventories: invDel.rowCount, deletedProducts: prodDel.rowCount });
   } catch (error) {
@@ -748,3 +750,115 @@ router.delete('/products', async (req, res) => {
     client.release();
   }
 });
+
+// ============ CJ ORDER AUTOMATION ============
+
+// Submit paid order to CJ Dropshipping
+router.post('/orders/:orderId/submit-to-cj', async (req, res) => {
+  try {
+    const { orderId } = req.params;
+
+    // 1. Fetch order from database
+    const order = await getOrderById(orderId);
+    
+    if (!order) {
+      return res.status(404).json({ error: 'Order not found' });
+    }
+
+    // 2. Validate order status
+    if (order.status !== 'paid') {
+      return res.status(400).json({ error: `Order status is ${order.status}, must be paid to submit to CJ` });
+    }
+
+    // 3. Check if already submitted
+    if (order.cj_order_id) {
+      return res.status(400).json({ 
+        error: 'Order already submitted to CJ',
+        cjOrderId: order.cj_order_id,
+        cjOrderNumber: order.cj_order_number
+      });
+    }
+
+    // 4. Build CJ order payload
+    const cjOrderData = buildCJOrderData(order);
+
+    // 5. Validate we have CJ products
+    if (!cjOrderData.products || cjOrderData.products.length === 0) {
+      return res.status(400).json({ 
+        error: 'No CJ products found in order. Cart items must have cj_vid.' 
+      });
+    }
+
+    // 6. Submit order to CJ API
+    console.log(`[admin] Submitting order ${order.order_number} to CJ with data:`, JSON.stringify(cjOrderData, null, 2));
+    const cjResponse = await cjClient.createOrder(cjOrderData);
+
+    if (!cjResponse.result || !cjResponse.data) {
+      console.error('[admin] CJ order creation failed:', cjResponse);
+      return res.status(500).json({ 
+        error: 'CJ order creation failed',
+        details: cjResponse.message || 'Unknown error'
+      });
+    }
+
+    // 7. Update local order with CJ info
+    const cjOrderId = cjResponse.data.orderId;
+    const cjOrderNumber = cjResponse.data.orderNum;
+    await updateOrderCJInfo(orderId, cjOrderId, cjOrderNumber, 'SUBMITTED');
+
+    console.log(`[admin] ✓ Order ${order.order_number} submitted to CJ. CJ Order ID: ${cjOrderId}, CJ Order #: ${cjOrderNumber}`);
+
+    res.json({
+      success: true,
+      message: 'Order submitted to CJ successfully',
+      cjOrderId,
+      cjOrderNumber,
+      orderNumber: order.order_number
+    });
+
+  } catch (error) {
+    console.error('[admin] Submit to CJ error:', error);
+    res.status(500).json({ 
+      error: 'Failed to submit order to CJ',
+      details: error.message 
+    });
+  }
+});
+
+// Get all orders for admin dashboard
+router.get('/orders', async (req, res) => {
+  try {
+    const result = await pool.query(`
+      SELECT 
+        id,
+        order_number,
+        user_id,
+        items,
+        total_amount,
+        status,
+        cj_order_id,
+        cj_order_number,
+        cj_tracking_number,
+        cj_tracking_url,
+        cj_status,
+        cj_submitted_at,
+        created_at,
+        updated_at
+      FROM orders
+      ORDER BY created_at DESC
+      LIMIT 100
+    `);
+
+    // Parse items JSON for each order
+    const orders = result.rows.map(order => ({
+      ...order,
+      items: JSON.parse(order.items)
+    }));
+
+    res.json({ orders });
+  } catch (error) {
+    console.error('[admin] Get orders error:', error);
+    res.status(500).json({ error: 'Failed to fetch orders' });
+  }
+});
+
