@@ -106,6 +106,9 @@ async function initDb() {
   await pool.query(`ALTER TABLE orders ADD COLUMN IF NOT EXISTS shipping_postal_code TEXT;`);
   await pool.query(`ALTER TABLE orders ADD COLUMN IF NOT EXISTS shipping_phone TEXT;`);
   
+  // Email tracking - prevent duplicate confirmation emails on PayFast IPN retries
+  await pool.query(`ALTER TABLE orders ADD COLUMN IF NOT EXISTS sent_confirmation BOOLEAN DEFAULT FALSE;`);
+  
   // Migration: Change user_id from INTEGER to TEXT for Supabase UUID compatibility
   try {
     await pool.query(`ALTER TABLE orders ALTER COLUMN user_id TYPE TEXT;`);
