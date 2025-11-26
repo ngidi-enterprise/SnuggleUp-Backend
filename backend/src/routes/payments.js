@@ -2,7 +2,8 @@ import express from 'express';
 import crypto from 'crypto';
 import fetch from 'node-fetch';
 import { authenticateToken } from '../middleware/auth.js';
-import { createOrder, updateOrderStatus } from './orders.js';
+import { createOrder, updateOrderStatus, getOrderByNumber } from './orders.js';
+import { sendOrderConfirmationEmail } from '../services/emailService.js';
 
 export const router = express.Router();
 
@@ -49,7 +50,13 @@ router.post('/create', optionalAuth, async (req, res) => {
     const orderNumber = `ORDER-${Date.now()}`;
     
     // Create order record in database (with pending status)
-  const userId = req.user?.userId || 'guest';
+    const userId = req.user?.userId || 'guest';
+    // Merge/derive shipping details: allow frontend-provided values, fallback to user name when available
+    const safeShippingDetails = {
+      ...(shippingDetails || {}),
+      customerName: (shippingDetails && shippingDetails.customerName) || req.user?.name || undefined,
+    };
+
     try {
       await createOrder(userId, {
         orderNumber,
@@ -62,7 +69,7 @@ router.post('/create', optionalAuth, async (req, res) => {
         shippingCountry,
         shippingMethod,
         insurance,
-        shippingDetails
+        shippingDetails: safeShippingDetails
       });
       console.log('✅ Order created:', orderNumber);
     } catch (orderError) {
@@ -78,7 +85,7 @@ router.post('/create', optionalAuth, async (req, res) => {
       return_url: `${backendUrl}/api/payments/success`,
       cancel_url: `${backendUrl}/api/payments/cancel`,
       notify_url: `${backendUrl}/api/payments/notify`,
-      name_first: req.user?.email?.split('@')[0] || 'Customer',
+      name_first: (req.user?.name || req.user?.email?.split('@')[0] || 'Customer').toString().slice(0, 60),
       email_address: email,
       m_payment_id: orderNumber,
       amount: parseFloat(amount).toFixed(2),
@@ -204,6 +211,21 @@ router.post('/notify', async (req, res) => {
     if (signaturesMatch && validationOk) {
       if (paymentStatus === 'COMPLETE') {
         await updateOrderStatus(orderNumber, 'paid', payfastPaymentId);
+        // Send order confirmation email (best-effort)
+        try {
+          const order = await getOrderByNumber(orderNumber);
+          if (order && order.customer_email) {
+            const items = Array.isArray(order.items) ? order.items : [];
+            await sendOrderConfirmationEmail({
+              to: order.customer_email,
+              orderNumber: order.order_number,
+              totalAmount: order.total,
+              items
+            });
+          }
+        } catch (e) {
+          console.warn('Order confirmation email failed:', e.message);
+        }
       } else if (paymentStatus === 'FAILED') {
         await updateOrderStatus(orderNumber, 'failed', payfastPaymentId);
       } else if (paymentStatus === 'PENDING') {
