@@ -4,6 +4,7 @@ import { cjClient } from '../services/cjClient.js';
 import { requireAdmin } from '../middleware/admin.js';
 import { syncCuratedInventory, getCuratedInventorySnapshot } from '../services/inventorySync.js';
 import { updateOrderTracking } from './orders.js';
+import { sendTrackingEmail } from '../services/emailService.js';
 import pool from '../db.js';
 
 export const router = express.Router();
@@ -235,10 +236,7 @@ router.post('/webhook', express.json({ type: 'application/json' }), async (req, 
         // Update order in database
         await updateOrderTracking(cjOrderId, trackingNumber, trackingUrl || '');
         
-        // TODO: Send customer email notification with tracking info
-        // This would require setting up an email service (e.g., SendGrid, AWS SES)
-        // Example implementation:
-        /*
+        // Send customer email notification with tracking info
         const orderResult = await pool.query(
           'SELECT customer_email, order_number FROM orders WHERE cj_order_id = $1',
           [cjOrderId]
@@ -246,14 +244,19 @@ router.post('/webhook', express.json({ type: 'application/json' }), async (req, 
         
         if (orderResult.rows.length > 0) {
           const order = orderResult.rows[0];
-          await sendTrackingEmail({
+          const emailResult = await sendTrackingEmail({
             to: order.customer_email,
             orderNumber: order.order_number,
             trackingNumber,
             trackingUrl
           });
+          
+          if (emailResult.success) {
+            console.log(`📧 Tracking email sent to ${order.customer_email}`);
+          } else {
+            console.warn(`⚠️ Failed to send tracking email: ${emailResult.error}`);
+          }
         }
-        */
         
         console.log(`✅ Tracking updated for CJ order ${cjOrderId}`);
       } else {
