@@ -7,9 +7,9 @@ import { getOrderById, buildCJOrderData, updateOrderCJInfo } from './orders.js';
 
 export const router = express.Router();
 
-// Currency conversion - frontend sends USD from CJ, we store ZAR
-const USD_TO_ZAR = parseFloat(process.env.USD_TO_ZAR) || 18.90;
-const PRICE_MARKUP = parseFloat(process.env.PRICE_MARKUP) || 2.0;
+// Currency conversion - frontend sends USD from CJ, we convert to ZAR
+const USD_TO_ZAR = parseFloat(process.env.USD_TO_ZAR) || 19.0;
+const PRICE_MARKUP = parseFloat(process.env.PRICE_MARKUP) || 1.5; // Default 1.5x markup on ZAR cost
 
 // Lightweight request logger to aid production debugging
 router.use((req, _res, next) => {
@@ -148,19 +148,20 @@ router.post('/products', async (req, res) => {
       return res.status(400).json({ error: 'Missing required fields' });
     }
 
-    // Validate price is a valid number
-    // Frontend already converts USD → ZAR, so we receive ZAR cost price
-    const costZAR = Number(cj_cost_price);
-    if (isNaN(costZAR) || costZAR <= 0) {
+    // Cost price is in USD from CJ, convert to ZAR
+    const costUSD = Number(cj_cost_price);
+    if (isNaN(costUSD) || costUSD <= 0) {
       return res.status(400).json({ error: 'Invalid price: must be a positive number' });
     }
+    
+    const costZAR = Math.round(costUSD * USD_TO_ZAR * 100) / 100;
 
-    // Use custom suggested price if provided, otherwise apply default markup
+    // Use custom suggested price if provided, otherwise apply markup to ZAR cost
     const suggested_price = custom_suggested_price 
       ? Math.round(Number(custom_suggested_price) * 100) / 100
       : Math.round(costZAR * PRICE_MARKUP * 100) / 100;
 
-    console.log(`💰 Received cost: R${costZAR} ZAR, ${custom_suggested_price ? 'custom' : 'default'} retail: R${suggested_price} (${(suggested_price / costZAR).toFixed(2)}x markup)`);
+    console.log(`💰 Cost: $${costUSD} USD → R${costZAR} ZAR, ${custom_suggested_price ? 'custom' : 'default'} retail: R${suggested_price} (${(suggested_price / costZAR).toFixed(2)}x markup)`);
 
     // Fetch initial stock from CJ if we have a variant ID
     let stockQuantity = 0;
@@ -188,7 +189,7 @@ router.post('/products', async (req, res) => {
           (cj_pid, cj_vid, product_name, original_cj_title, seo_title, product_description, product_material, product_features, package_size, packing_list, product_weight, product_image, cj_cost_price, suggested_price, custom_price, category, stock_quantity)
           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)
           RETURNING *
-        `, [cj_pid, resolvedVid, product_name, original_cj_title || product_name, seo_title, product_description, product_material, product_features, package_size, packing_list, product_weight, product_image, costZAR, suggested_price, suggested_price, category, stockQuantity]);
+        `, [cj_pid, resolvedVid, product_name, original_cj_title || product_name, seo_title, product_description, product_material, product_features, package_size, packing_list, product_weight, product_image, costUSD, suggested_price, suggested_price, category, stockQuantity]);
 
         const curatedProductId = result.rows[0].id;
 
@@ -223,7 +224,7 @@ router.post('/products', async (req, res) => {
       (cj_pid, cj_vid, product_name, original_cj_title, seo_title, product_description, product_material, product_features, package_size, packing_list, product_weight, product_image, cj_cost_price, suggested_price, custom_price, category, stock_quantity)
       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)
       RETURNING *
-    `, [cj_pid, resolvedVid, product_name, original_cj_title || product_name, seo_title, product_description, product_material, product_features, package_size, packing_list, product_weight, product_image, costZAR, suggested_price, suggested_price, category, stockQuantity]);
+    `, [cj_pid, resolvedVid, product_name, original_cj_title || product_name, seo_title, product_description, product_material, product_features, package_size, packing_list, product_weight, product_image, costUSD, suggested_price, suggested_price, category, stockQuantity]);
 
     res.status(201).json({ product: result.rows[0] });
   } catch (error) {
