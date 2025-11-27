@@ -108,6 +108,19 @@ router.post('/quote', optionalAuth, async (req, res) => {
       return { ...q, priceZAR, priceUSD, isFallback: false };
     });
 
+    // If CJ returned no methods at all, synthesize a single fallback quote
+    if (!quotesWithZAR || quotesWithZAR.length === 0) {
+      const fallbackZAR = computeFallbackShipping(orderValue);
+      console.warn(`⚠️ CJ returned no shipping methods. Using synthesized fallback quote based on subtotal R${orderValue}: R${fallbackZAR}`);
+      quotesWithZAR.push({
+        logisticName: 'Estimated Standard',
+        deliveryDay: '15-25',
+        priceUSD: 0,
+        priceZAR: fallbackZAR,
+        isFallback: true
+      });
+    }
+
     // Calculate insurance cost (3% of order value, min R25, max R500)
     const insuranceData = orderValue ? {
       available: true,
