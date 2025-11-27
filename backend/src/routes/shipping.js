@@ -98,7 +98,7 @@ router.post('/quote', optionalAuth, async (req, res) => {
       let priceZAR = Math.ceil(priceUSD * USD_TO_ZAR * 100) / 100;
 
       // If CJ returns 0 or very low price, use intelligent subtotal-based fallback
-      if (priceZAR < 10) {
+      if (priceZAR < 250) {
         const fallback = computeFallbackShipping(orderValue);
         console.warn(`⚠️ CJ returned low/zero shipping cost (${priceZAR} ZAR). Using fallback based on subtotal R${orderValue}: R${fallback}`);
         priceZAR = fallback;
