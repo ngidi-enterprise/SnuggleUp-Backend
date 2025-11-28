@@ -600,6 +600,7 @@ router.get('/cj-products/search', async (req, res) => {
               price: result.price,
               image: result.image,
               category: result.categoryName,
+              originCountry: 'CN',
               variants: result.variants
             }],
             total: 1,
@@ -636,13 +637,12 @@ router.get('/cj-products/search', async (req, res) => {
         pageNum: pageNum ? Number(pageNum) : 1,
         pageSize: pageSize ? Number(pageSize) : 20,
       });
-      // Strictly filter to China-origin only
-      const chinaItems = (result.items || []).filter(item => item.originCountry === 'CN');
-      // Normalize field names for frontend consistency and carry originCountry forward
-      const normalizedItems = chinaItems.map(item => ({
+      // Normalize field names for frontend consistency. We already request CN upstream,
+      // so default originCountry to 'CN' when CJ omits it.
+      const normalizedItems = (result.items || []).map(item => ({
         ...item,
         category: item.categoryName || item.category || 'Baby/Kids',
-        originCountry: item.originCountry || null
+        originCountry: item.originCountry || 'CN'
       }));
       res.json({
         ...result,
