@@ -636,16 +636,18 @@ router.get('/cj-products/search', async (req, res) => {
         pageNum: pageNum ? Number(pageNum) : 1,
         pageSize: pageSize ? Number(pageSize) : 20,
       });
-      
-      // Normalize field names for frontend consistency
-      const normalizedItems = (result.items || []).map(item => ({
+      // Strictly filter to China-origin only
+      const chinaItems = (result.items || []).filter(item => item.originCountry === 'CN');
+      // Normalize field names for frontend consistency and carry originCountry forward
+      const normalizedItems = chinaItems.map(item => ({
         ...item,
-        category: item.categoryName || item.category || 'Baby/Kids'
+        category: item.categoryName || item.category || 'Baby/Kids',
+        originCountry: item.originCountry || null
       }));
-      
       res.json({
         ...result,
-        items: normalizedItems
+        items: normalizedItems,
+        total: normalizedItems.length
       });
     }
   } catch (error) {
