@@ -525,6 +525,56 @@ router.post('/products/recalculate-suggested-prices', async (req, res) => {
   }
 });
 
+// Sync all retail prices to corrected suggested prices
+// POST /api/admin/products/sync-retail-to-suggested
+router.post('/products/sync-retail-to-suggested', async (req, res) => {
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    
+    // Get current state before update
+    const before = await client.query(
+      `SELECT id, product_name, custom_price, suggested_price FROM curated_products ORDER BY id LIMIT 5`
+    );
+
+    // First recalculate suggested_price from ZAR cost
+    const recalc = await client.query(
+      `UPDATE curated_products
+       SET suggested_price = ROUND((cj_cost_price * $1 * $2) * 100) / 100
+       WHERE TRUE`,
+      [USD_TO_ZAR, PRICE_MARKUP]
+    );
+
+    // Then sync custom_price to match the corrected suggested_price
+    const update = await client.query(
+      `UPDATE curated_products
+       SET custom_price = suggested_price,
+           updated_at = NOW()
+       WHERE TRUE
+       RETURNING id, product_name, suggested_price, custom_price`,
+      []
+    );
+    
+    await client.query('COMMIT');
+
+    console.log(`✓ Synced ${update.rows.length} products: custom_price → suggested_price (USD × ${USD_TO_ZAR} × ${PRICE_MARKUP})`);
+    
+    res.json({ 
+      success: true,
+      updated: update.rows.length,
+      message: `All retail prices synced to corrected suggested prices (${USD_TO_ZAR} ZAR × ${PRICE_MARKUP} markup)`,
+      beforeSample: before.rows,
+      afterSample: update.rows.slice(0, 5)
+    });
+  } catch (error) {
+    await client.query('ROLLBACK');
+    console.error('Sync retail to suggested error:', error);
+    res.status(500).json({ error: 'Failed to sync retail prices' });
+  } finally {
+    client.release();
+  }
+});
+
 // Search supplier products (for adding to curated list)
 // Supports both name search and direct PID lookup
 router.get('/cj-products/search', async (req, res) => {
