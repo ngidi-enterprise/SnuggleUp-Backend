@@ -7,9 +7,22 @@ import { getOrderById, buildCJOrderData, updateOrderCJInfo } from './orders.js';
 
 export const router = express.Router();
 
-// Currency conversion - frontend sends USD from CJ, we convert to ZAR
-const USD_TO_ZAR = parseFloat(process.env.USD_TO_ZAR) || 19.0;
-const PRICE_MARKUP = parseFloat(process.env.PRICE_MARKUP) || 1.5; // Default 1.5x markup on ZAR cost
+// Currency conversion - frontend sends USD from supplier, we convert to ZAR
+const RAW_USD_TO_ZAR = parseFloat(process.env.USD_TO_ZAR);
+let USD_TO_ZAR = 19.0; // safe default
+if (Number.isFinite(RAW_USD_TO_ZAR)) {
+  // Protect against accidental setting to 1 or other tiny values
+  if (RAW_USD_TO_ZAR >= 5) {
+    USD_TO_ZAR = RAW_USD_TO_ZAR;
+  } else {
+    console.warn(`[admin] USD_TO_ZAR value '${RAW_USD_TO_ZAR}' too low – using fallback 19.0. Set USD_TO_ZAR>=5 to override.`);
+  }
+} else {
+  console.warn('[admin] USD_TO_ZAR env not set – using fallback 19.0');
+}
+const RAW_PRICE_MARKUP = parseFloat(process.env.PRICE_MARKUP);
+const PRICE_MARKUP = Number.isFinite(RAW_PRICE_MARKUP) ? RAW_PRICE_MARKUP : 1.5; // Default 1.5x markup on ZAR cost
+
 
 // Lightweight request logger to aid production debugging
 router.use((req, _res, next) => {
@@ -32,6 +45,18 @@ router.get('/debug', (req, res) => {
     email: req.user?.email || null,
     localUserId: req.localUserId || null,
     supabaseUser: !!req.user?.supabaseUser,
+  });
+});
+
+// Pricing config introspection (helps debug env issues in deployment)
+router.get('/pricing-config', (req, res) => {
+  res.json({
+    usdToZar: USD_TO_ZAR,
+    priceMarkup: PRICE_MARKUP,
+    rawEnv: {
+      USD_TO_ZAR: process.env.USD_TO_ZAR || null,
+      PRICE_MARKUP: process.env.PRICE_MARKUP || null
+    }
   });
 });
 
