@@ -9,7 +9,7 @@ export const router = express.Router();
 
 // Currency conversion - frontend sends USD from supplier, we convert to ZAR
 const RAW_USD_TO_ZAR = parseFloat(process.env.USD_TO_ZAR);
-let USD_TO_ZAR = 19.0; // safe default
+let USD_TO_ZAR = 18.0; // safe default aligned with pricing tab
 if (Number.isFinite(RAW_USD_TO_ZAR)) {
   // Protect against accidental setting to 1 or other tiny values
   if (RAW_USD_TO_ZAR >= 5) {
@@ -21,7 +21,7 @@ if (Number.isFinite(RAW_USD_TO_ZAR)) {
   console.warn('[admin] USD_TO_ZAR env not set – using fallback 19.0');
 }
 const RAW_PRICE_MARKUP = parseFloat(process.env.PRICE_MARKUP);
-const PRICE_MARKUP = Number.isFinite(RAW_PRICE_MARKUP) ? RAW_PRICE_MARKUP : 1.5; // Default 1.5x markup on ZAR cost
+const PRICE_MARKUP = Number.isFinite(RAW_PRICE_MARKUP) ? RAW_PRICE_MARKUP : 1.4; // Default 1.4x markup on ZAR cost
 
 
 // Lightweight request logger to aid production debugging
@@ -601,6 +601,7 @@ router.get('/cj-products/search', async (req, res) => {
               image: result.image,
               category: result.categoryName,
               originCountry: 'CN',
+              suggestedRetailZAR: Math.round((Number(result.price) * USD_TO_ZAR * PRICE_MARKUP) * 100) / 100,
               variants: result.variants
             }],
             total: 1,
@@ -642,7 +643,8 @@ router.get('/cj-products/search', async (req, res) => {
       const normalizedItems = (result.items || []).map(item => ({
         ...item,
         category: item.categoryName || item.category || 'Baby/Kids',
-        originCountry: item.originCountry || 'CN'
+        originCountry: item.originCountry || 'CN',
+        suggestedRetailZAR: Math.round((Number(item.price) * USD_TO_ZAR * PRICE_MARKUP) * 100) / 100
       }));
       res.json({
         ...result,
