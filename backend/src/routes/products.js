@@ -8,23 +8,29 @@ router.get('/', async (req, res) => {
   try {
     const { category, minPrice, maxPrice, sortBy = 'created_at', sortOrder = 'DESC' } = req.query;
 
-    let query = 'SELECT * FROM curated_products WHERE is_active = TRUE';
+    // Join curated_products with curated_product_inventories to get warehouse/country info
+    let query = `
+      SELECT cp.*, cpi.warehouse_name, cpi.country_code
+      FROM curated_products cp
+      LEFT JOIN curated_product_inventories cpi ON cp.id = cpi.curated_product_id
+      WHERE cp.is_active = TRUE
+    `;
     const params = [];
     let paramCount = 1;
 
     // Filter by category
     if (category && category !== 'all') {
-      query += ` AND category = $${paramCount++}`;
+      query += ` AND cp.category = $${paramCount++}`;
       params.push(category);
     }
 
     // Filter by price range (uses custom_price as the display price)
     if (minPrice) {
-      query += ` AND custom_price >= $${paramCount++}`;
+      query += ` AND cp.custom_price >= $${paramCount++}`;
       params.push(parseFloat(minPrice));
     }
     if (maxPrice) {
-      query += ` AND custom_price <= $${paramCount++}`;
+      query += ` AND cp.custom_price <= $${paramCount++}`;
       params.push(parseFloat(maxPrice));
     }
 
@@ -33,14 +39,28 @@ router.get('/', async (req, res) => {
     const allowedOrders = ['ASC', 'DESC'];
     const finalSort = allowedSortFields.includes(sortBy) ? sortBy : 'created_at';
     const finalOrder = allowedOrders.includes(sortOrder.toUpperCase()) ? sortOrder.toUpperCase() : 'DESC';
-    
-    query += ` ORDER BY ${finalSort} ${finalOrder}`;
+    query += ` ORDER BY cp.${finalSort} ${finalOrder}`;
 
     const result = await pool.query(query, params);
 
+    // Group by product id to merge multiple warehouses (if any)
+    const productsMap = {};
+    for (const row of result.rows) {
+      if (!productsMap[row.id]) {
+        productsMap[row.id] = { ...row, warehouses: [] };
+      }
+      if (row.warehouse_name && row.country_code) {
+        productsMap[row.id].warehouses.push({
+          warehouse_name: row.warehouse_name,
+          country_code: row.country_code
+        });
+      }
+    }
+    const products = Object.values(productsMap);
+
     res.json({
-      products: result.rows,
-      total: result.rows.length,
+      products,
+      total: products.length,
       source: 'curated'
     });
   } catch (error) {
