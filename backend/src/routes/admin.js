@@ -458,6 +458,48 @@ router.post('/products/fix-inflated', async (req, res) => {
   }
 });
 
+// Recalculate suggested prices for all products
+// POST /api/admin/products/recalculate-suggested-prices
+router.post('/products/recalculate-suggested-prices', async (req, res) => {
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    
+    // Get current state before update
+    const before = await client.query(
+      `SELECT id, product_name, cj_cost_price, suggested_price FROM curated_products ORDER BY id LIMIT 5`
+    );
+
+    // Recalculate: suggested_price = cj_cost_price (USD) × USD_TO_ZAR × PRICE_MARKUP
+    const update = await client.query(
+      `UPDATE curated_products
+       SET suggested_price = ROUND((cj_cost_price * $1 * $2) * 100) / 100,
+           updated_at = NOW()
+       WHERE TRUE
+       RETURNING id, product_name, cj_cost_price, suggested_price`,
+      [USD_TO_ZAR, PRICE_MARKUP]
+    );
+    
+    await client.query('COMMIT');
+
+    console.log(`✓ Recalculated suggested prices for ${update.rows.length} products (USD × ${USD_TO_ZAR} × ${PRICE_MARKUP})`);
+    
+    res.json({ 
+      success: true,
+      updated: update.rows.length,
+      formula: `USD cost × ${USD_TO_ZAR} × ${PRICE_MARKUP}`,
+      beforeSample: before.rows,
+      afterSample: update.rows.slice(0, 5)
+    });
+  } catch (error) {
+    await client.query('ROLLBACK');
+    console.error('Recalculate suggested prices error:', error);
+    res.status(500).json({ error: 'Failed to recalculate suggested prices' });
+  } finally {
+    client.release();
+  }
+});
+
 // Search supplier products (for adding to curated list)
 // Supports both name search and direct PID lookup
 router.get('/cj-products/search', async (req, res) => {
