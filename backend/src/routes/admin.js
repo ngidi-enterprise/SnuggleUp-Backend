@@ -645,7 +645,7 @@ router.get('/cj-products/search', async (req, res) => {
         category: item.categoryName || item.category || 'Baby/Kids',
         originCountry: item.originCountry || 'CN',
         suggestedRetailZAR: Math.round((Number(item.price) * USD_TO_ZAR * PRICE_MARKUP) * 100) / 100
-      }));
+      })).filter(i => i.originCountry === 'CN');
       res.json({
         ...result,
         items: normalizedItems,
