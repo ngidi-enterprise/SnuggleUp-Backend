@@ -135,11 +135,24 @@ router.get('/analytics', async (req, res) => {
 // ============ PRODUCT CURATION ============
 
 // Get all curated products
+// Get all curated products with aggregated warehouse fulfillment info
 router.get('/products', async (req, res) => {
   try {
     const result = await pool.query(`
-      SELECT * FROM curated_products 
-      ORDER BY created_at DESC
+      SELECT 
+        cp.*, 
+        COALESCE(json_agg(json_build_object(
+          'warehouse_id', ci.warehouse_id,
+          'warehouse_name', ci.warehouse_name,
+          'country_code', ci.country_code,
+          'total_inventory', ci.total_inventory,
+          'cj_inventory', ci.cj_inventory,
+          'factory_inventory', ci.factory_inventory
+        ) ORDER BY ci.country_code) FILTER (WHERE ci.warehouse_id IS NOT NULL), '[]') AS warehouses
+      FROM curated_products cp
+      LEFT JOIN curated_product_inventories ci ON ci.curated_product_id = cp.id
+      GROUP BY cp.id
+      ORDER BY cp.created_at DESC
     `);
     res.json({ products: result.rows });
   } catch (error) {
