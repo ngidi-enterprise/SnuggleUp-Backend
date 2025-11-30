@@ -646,17 +646,21 @@ router.get('/cj-products/search', async (req, res) => {
       // Normalize field names for frontend consistency. We already request CN upstream,
       // so default originCountry to 'CN' when CJ omits it.
       const normalizedItems = (result.items || []).map(item => {
-        // Derive origin country from available fields; do NOT default to CN unless present.
+        // Derive origin country from available fields
         const origin = item.originCountry || item.fromCountryCode || item.countryCode || item.sourceCountryCode || null;
         return {
           ...item,
           category: item.categoryName || item.category || 'Baby/Kids',
-          originCountry: origin, // may be null (UNKNOWN)
+          originCountry: origin, // may be null (UNKNOWN) - will be shown in UI
           suggestedRetailZAR: Math.round((Number(item.price) * USD_TO_ZAR * PRICE_MARKUP) * 100) / 100
         };
-      })
-      // Keep only explicit CN origin; exclude null/unknown to avoid accidental defaulting
-      .filter(i => i.originCountry === 'CN');
+      });
+      // TEMPORARILY DISABLED CN filter to debug - CJ API not returning origin country field
+      // .filter(i => i.originCountry === 'CN');
+      
+      console.log(`📋 CJ Search returned ${normalizedItems.length} items, origin countries:`, 
+        normalizedItems.slice(0, 5).map(i => ({ pid: i.pid, origin: i.originCountry })));
+      
       res.json({
         ...result,
         items: normalizedItems,
