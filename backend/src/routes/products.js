@@ -94,9 +94,16 @@ router.get('/:id', async (req, res) => {
 
     const product = result.rows[0];
     
-    // Fetch all variants sharing the same cj_pid
+    // Fetch all variants: prefer shared group_code, else cj_pid
     let variants = [];
-    if (product.cj_pid) {
+    if (product.group_code) {
+      const variantsResult = await pool.query(`
+        SELECT * FROM curated_products 
+        WHERE group_code = $1 AND is_active = TRUE
+        ORDER BY id
+      `, [product.group_code]);
+      variants = variantsResult.rows;
+    } else if (product.cj_pid) {
       const variantsResult = await pool.query(`
         SELECT * FROM curated_products 
         WHERE cj_pid = $1 AND is_active = TRUE
@@ -111,7 +118,8 @@ router.get('/:id', async (req, res) => {
       cj_pid: product.cj_pid,
       cj_vid: product.cj_vid,
       has_cj_vid: !!product.cj_vid,
-      variantCount: variants.length
+      variantCount: variants.length,
+      group_code: product.group_code || null
     });
 
     res.json({ product, variants });
