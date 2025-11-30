@@ -127,6 +127,7 @@ async function initDb() {
       id SERIAL PRIMARY KEY,
       cj_pid TEXT UNIQUE NOT NULL,
       cj_vid TEXT,
+      group_code TEXT,
       product_name TEXT NOT NULL,
       original_cj_title TEXT,
       seo_title TEXT,
@@ -155,7 +156,8 @@ async function initDb() {
     ADD COLUMN IF NOT EXISTS product_features TEXT,
     ADD COLUMN IF NOT EXISTS package_size TEXT,
     ADD COLUMN IF NOT EXISTS packing_list TEXT,
-    ADD COLUMN IF NOT EXISTS product_weight TEXT;
+    ADD COLUMN IF NOT EXISTS product_weight TEXT,
+    ADD COLUMN IF NOT EXISTS group_code TEXT;
   `);
 
   // Detailed per-warehouse inventory snapshots for curated products
