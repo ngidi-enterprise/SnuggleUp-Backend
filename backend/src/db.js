@@ -194,6 +194,18 @@ async function initDb() {
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_sync_history_started_at ON inventory_sync_history(started_at DESC);`);
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_sync_history_status ON inventory_sync_history(status);`);
 
+  // Global site configuration key/value store (pricing etc.)
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS site_config (
+      key TEXT PRIMARY KEY,
+      value TEXT NOT NULL,
+      updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    );
+  `);
+  // Seed default pricing config if absent
+  await pool.query(`INSERT INTO site_config (key, value) VALUES ('price_markup','1.4') ON CONFLICT (key) DO NOTHING;`);
+  await pool.query(`INSERT INTO site_config (key, value) VALUES ('usd_to_zar','18.0') ON CONFLICT (key) DO NOTHING;`);
+
   // Cart persistence table - stores user cart items
   await pool.query(`
     CREATE TABLE IF NOT EXISTS carts (
