@@ -135,22 +135,14 @@ router.get('/analytics', async (req, res) => {
 // ============ PRODUCT CURATION ============
 
 // Get all curated products
-// Get all curated products with aggregated warehouse fulfillment info
 router.get('/products', async (req, res) => {
   try {
     const result = await pool.query(`
       SELECT 
         cp.*, 
-        COALESCE(json_agg(json_build_object(
-          'warehouse_id', ci.warehouse_id,
-          'warehouse_name', ci.warehouse_name,
-          'country_code', ci.country_code,
-          'total_inventory', ci.total_inventory,
-          'cj_inventory', ci.cj_inventory,
-          'factory_inventory', ci.factory_inventory
-        ) ORDER BY ci.country_code) FILTER (WHERE ci.warehouse_id IS NOT NULL), '[]') AS warehouses
+        COALESCE(array_remove(array_agg(DISTINCT cpi.country_code), NULL), '{}') AS warehouse_countries
       FROM curated_products cp
-      LEFT JOIN curated_product_inventories ci ON ci.curated_product_id = cp.id
+      LEFT JOIN curated_product_inventories cpi ON cpi.curated_product_id = cp.id
       GROUP BY cp.id
       ORDER BY cp.created_at DESC
     `);
@@ -653,12 +645,18 @@ router.get('/cj-products/search', async (req, res) => {
       });
       // Normalize field names for frontend consistency. We already request CN upstream,
       // so default originCountry to 'CN' when CJ omits it.
-      const normalizedItems = (result.items || []).map(item => ({
-        ...item,
-        category: item.categoryName || item.category || 'Baby/Kids',
-        originCountry: item.originCountry || 'CN',
-        suggestedRetailZAR: Math.round((Number(item.price) * USD_TO_ZAR * PRICE_MARKUP) * 100) / 100
-      })).filter(i => i.originCountry === 'CN');
+      const normalizedItems = (result.items || []).map(item => {
+        // Derive origin country from available fields; do NOT default to CN unless present.
+        const origin = item.originCountry || item.fromCountryCode || item.countryCode || item.sourceCountryCode || null;
+        return {
+          ...item,
+          category: item.categoryName || item.category || 'Baby/Kids',
+          originCountry: origin, // may be null (UNKNOWN)
+          suggestedRetailZAR: Math.round((Number(item.price) * USD_TO_ZAR * PRICE_MARKUP) * 100) / 100
+        };
+      })
+      // Keep only explicit CN origin; exclude null/unknown to avoid accidental defaulting
+      .filter(i => i.originCountry === 'CN');
       res.json({
         ...result,
         items: normalizedItems,
@@ -687,30 +685,28 @@ router.get('/cj-products/:pid', async (req, res) => {
 router.get('/products/search', async (req, res) => {
   try {
     const { q } = req.query;
-    
-    if (!q) {
-      return res.json({ products: [] });
-    }
-    
+    if (!q) return res.json({ products: [] });
     const searchTerm = `%${q}%`;
     const numericId = isNaN(q) ? null : parseInt(q);
-    
-    // Search by: database ID, CJ PID, or product name
     const result = await pool.query(`
-      SELECT * FROM curated_products 
-      WHERE id = $1 
-         OR cj_pid ILIKE $2 
-         OR product_name ILIKE $2
+      SELECT 
+        cp.*, 
+        COALESCE(array_remove(array_agg(DISTINCT cpi.country_code), NULL), '{}') AS warehouse_countries
+      FROM curated_products cp
+      LEFT JOIN curated_product_inventories cpi ON cpi.curated_product_id = cp.id
+      WHERE cp.id = $1 
+         OR cp.cj_pid ILIKE $2 
+         OR cp.product_name ILIKE $2
+      GROUP BY cp.id
       ORDER BY 
         CASE 
-          WHEN id = $1 THEN 1
-          WHEN cj_pid ILIKE $2 THEN 2
+          WHEN cp.id = $1 THEN 1
+          WHEN cp.cj_pid ILIKE $2 THEN 2
           ELSE 3
         END,
-        created_at DESC
+        cp.created_at DESC
       LIMIT 20
     `, [numericId, searchTerm]);
-    
     res.json({ products: result.rows });
   } catch (error) {
     console.error('Curated product search error:', error);
