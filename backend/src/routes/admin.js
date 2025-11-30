@@ -7,21 +7,50 @@ import { getOrderById, buildCJOrderData, updateOrderCJInfo } from './orders.js';
 
 export const router = express.Router();
 
-// Currency conversion - frontend sends USD from supplier, we convert to ZAR
-const RAW_USD_TO_ZAR = parseFloat(process.env.USD_TO_ZAR);
-let USD_TO_ZAR = 18.0; // safe default aligned with pricing tab
-if (Number.isFinite(RAW_USD_TO_ZAR)) {
-  // Protect against accidental setting to 1 or other tiny values
-  if (RAW_USD_TO_ZAR >= 5) {
-    USD_TO_ZAR = RAW_USD_TO_ZAR;
-  } else {
-    console.warn(`[admin] USD_TO_ZAR value '${RAW_USD_TO_ZAR}' too low – using fallback 19.0. Set USD_TO_ZAR>=5 to override.`);
+// Dynamic pricing config (loaded from DB site_config; falls back to ENV/defaults)
+let USD_TO_ZAR = 18.0;
+let PRICE_MARKUP = 1.4;
+
+async function loadPricingConfig() {
+  try {
+    const result = await pool.query(`SELECT key, value FROM site_config WHERE key IN ('usd_to_zar','price_markup')`);
+    const map = Object.fromEntries(result.rows.map(r => [r.key, r.value]));
+    const envUsd = parseFloat(process.env.USD_TO_ZAR);
+    const envMarkup = parseFloat(process.env.PRICE_MARKUP);
+    // DB overrides env if valid
+    const usdCandidate = parseFloat(map.usd_to_zar || (Number.isFinite(envUsd) ? envUsd : ''));
+    if (Number.isFinite(usdCandidate) && usdCandidate >= 5) {
+      USD_TO_ZAR = usdCandidate;
+    }
+    const markupCandidate = parseFloat(map.price_markup || (Number.isFinite(envMarkup) ? envMarkup : ''));
+    if (Number.isFinite(markupCandidate) && markupCandidate > 0.2 && markupCandidate <= 10) {
+      PRICE_MARKUP = markupCandidate;
+    }
+    console.log(`[pricing] Loaded config USD_TO_ZAR=${USD_TO_ZAR} PRICE_MARKUP=${PRICE_MARKUP}`);
+  } catch (e) {
+    console.warn('[pricing] Failed loading site_config, using defaults', e.message);
   }
-} else {
-  console.warn('[admin] USD_TO_ZAR env not set – using fallback 19.0');
 }
-const RAW_PRICE_MARKUP = parseFloat(process.env.PRICE_MARKUP);
-const PRICE_MARKUP = Number.isFinite(RAW_PRICE_MARKUP) ? RAW_PRICE_MARKUP : 1.4; // Default 1.4x markup on ZAR cost
+loadPricingConfig();
+
+async function updatePricingConfig({ usdToZar, priceMarkup }) {
+  const updates = [];
+  if (usdToZar !== undefined) {
+    const num = parseFloat(usdToZar);
+    if (!Number.isFinite(num) || num < 5) throw new Error('usdToZar must be >=5');
+    await pool.query(`INSERT INTO site_config (key,value) VALUES ('usd_to_zar',$1) ON CONFLICT (key) DO UPDATE SET value=$1, updated_at=NOW()`, [num.toString()]);
+    USD_TO_ZAR = num;
+    updates.push('usd_to_zar');
+  }
+  if (priceMarkup !== undefined) {
+    const num = parseFloat(priceMarkup);
+    if (!Number.isFinite(num) || num <= 0.2 || num > 10) throw new Error('priceMarkup must be >0.2 and <=10');
+    await pool.query(`INSERT INTO site_config (key,value) VALUES ('price_markup',$1) ON CONFLICT (key) DO UPDATE SET value=$1, updated_at=NOW()`, [num.toString()]);
+    PRICE_MARKUP = num;
+    updates.push('price_markup');
+  }
+  return updates;
+}
 
 
 // Lightweight request logger to aid production debugging
@@ -49,15 +78,48 @@ router.get('/debug', (req, res) => {
 });
 
 // Pricing config introspection (helps debug env issues in deployment)
-router.get('/pricing-config', (req, res) => {
+router.get('/pricing-config', async (req, res) => {
+  // Always reload to reflect external changes (cheap query)
+  await loadPricingConfig();
   res.json({
     usdToZar: USD_TO_ZAR,
     priceMarkup: PRICE_MARKUP,
-    rawEnv: {
-      USD_TO_ZAR: process.env.USD_TO_ZAR || null,
-      PRICE_MARKUP: process.env.PRICE_MARKUP || null
-    }
+    source: 'db',
   });
+});
+
+// Update pricing config and optionally recalc/sync prices
+router.put('/pricing-config', async (req, res) => {
+  try {
+    const { usdToZar, priceMarkup, recalcSuggested, syncRetail } = req.body || {};
+    if (usdToZar === undefined && priceMarkup === undefined) {
+      return res.status(400).json({ error: 'Provide usdToZar and/or priceMarkup' });
+    }
+    const changed = await updatePricingConfig({ usdToZar, priceMarkup });
+    let recalcCount = 0;
+    if (recalcSuggested) {
+      const update = await pool.query(`UPDATE curated_products SET suggested_price = ROUND((cj_cost_price * $1 * $2) * 100) / 100, updated_at = NOW() RETURNING id`, [USD_TO_ZAR, PRICE_MARKUP]);
+      recalcCount = update.rowCount;
+    }
+    let syncCount = 0;
+    if (syncRetail) {
+      const sync = await pool.query(`UPDATE curated_products SET custom_price = suggested_price, updated_at = NOW() RETURNING id`);
+      syncCount = sync.rowCount;
+    }
+    res.json({
+      success: true,
+      changed,
+      usdToZar: USD_TO_ZAR,
+      priceMarkup: PRICE_MARKUP,
+      recalcSuggested: !!recalcSuggested,
+      recalcCount,
+      syncRetail: !!syncRetail,
+      syncCount,
+      formula: `USD cost × ${USD_TO_ZAR} × ${PRICE_MARKUP}`
+    });
+  } catch (e) {
+    res.status(400).json({ error: e.message });
+  }
 });
 
 // Get CJ access token (shows currently cached/valid token; will refresh if needed)
@@ -493,6 +555,8 @@ router.post('/products/fix-inflated', async (req, res) => {
 router.post('/products/recalculate-suggested-prices', async (req, res) => {
   const client = await pool.connect();
   try {
+    // Ensure latest pricing config
+    await loadPricingConfig();
     await client.query('BEGIN');
     
     // Get current state before update
@@ -535,6 +599,7 @@ router.post('/products/recalculate-suggested-prices', async (req, res) => {
 router.post('/products/sync-retail-to-suggested', async (req, res) => {
   const client = await pool.connect();
   try {
+    await loadPricingConfig();
     await client.query('BEGIN');
     
     // Get current state before update
