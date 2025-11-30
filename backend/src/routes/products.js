@@ -93,15 +93,28 @@ router.get('/:id', async (req, res) => {
     }
 
     const product = result.rows[0];
+    
+    // Fetch all variants sharing the same cj_pid
+    let variants = [];
+    if (product.cj_pid) {
+      const variantsResult = await pool.query(`
+        SELECT * FROM curated_products 
+        WHERE cj_pid = $1 AND is_active = TRUE
+        ORDER BY id
+      `, [product.cj_pid]);
+      variants = variantsResult.rows;
+    }
+    
     console.log(`📦 Product ${id} fetched:`, {
       id: product.id,
       name: product.product_name?.substring(0, 30),
       cj_pid: product.cj_pid,
       cj_vid: product.cj_vid,
-      has_cj_vid: !!product.cj_vid
+      has_cj_vid: !!product.cj_vid,
+      variantCount: variants.length
     });
 
-    res.json({ product: product });
+    res.json({ product, variants });
   } catch (error) {
     console.error('Get product detail error:', error);
     res.status(500).json({ error: 'Failed to fetch product' });
