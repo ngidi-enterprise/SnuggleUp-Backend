@@ -69,6 +69,47 @@ router.get('/', async (req, res) => {
   }
 });
 
+// DEBUG endpoint - Check VID status (temporary, no auth required)
+router.get('/debug/check-vids', async (req, res) => {
+  try {
+    const result = await pool.query(`
+      SELECT 
+        id,
+        product_name,
+        cj_pid,
+        cj_vid,
+        is_active,
+        CASE 
+          WHEN cj_vid IS NULL OR cj_vid = '' THEN false
+          ELSE true
+        END as has_vid
+      FROM curated_products 
+      WHERE is_active = TRUE
+      ORDER BY id
+      LIMIT 20
+    `);
+
+    const withVid = result.rows.filter(p => p.has_vid).length;
+    const missingVid = result.rows.filter(p => !p.has_vid).length;
+
+    res.json({
+      total: result.rows.length,
+      with_vid: withVid,
+      missing_vid: missingVid,
+      products: result.rows.map(p => ({
+        id: p.id,
+        name: p.product_name?.substring(0, 50),
+        cj_pid: p.cj_pid,
+        cj_vid: p.cj_vid ? p.cj_vid.substring(0, 20) + '...' : null,
+        has_vid: p.has_vid
+      }))
+    });
+  } catch (error) {
+    console.error('Check VIDs error:', error);
+    res.status(500).json({ error: 'Failed to check VIDs' });
+  }
+});
+
 // PUBLIC endpoint - Get single product details
 // Only supports lookup by database ID (not CJ PID for security/privacy)
 router.get('/:id', async (req, res) => {
