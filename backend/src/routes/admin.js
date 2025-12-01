@@ -2,6 +2,7 @@ import express from 'express';
 import { requireAdmin } from '../middleware/admin.js';
 import pool from '../db.js';
 import { cjClient } from '../services/cjClient.js';
+import { getRuntimeConfig, setShippingFallbackEnabled, isShippingFallbackEnabled } from '../services/configService.js';
 import { generateSEOTitles } from '../services/seoTitleGenerator.js';
 import { getOrderById, buildCJOrderData, updateOrderCJInfo } from './orders.js';
 
@@ -86,6 +87,18 @@ router.get('/pricing-config', async (req, res) => {
     priceMarkup: PRICE_MARKUP,
     source: 'db',
   });
+});
+
+// Runtime config: read current flags
+router.get('/config/runtime', (req, res) => {
+  res.json(getRuntimeConfig());
+});
+
+// Toggle shipping fallback feature flag
+router.post('/config/shipping-fallback', (req, res) => {
+  const enabled = !!(req.body?.enabled);
+  const current = setShippingFallbackEnabled(enabled);
+  res.json({ shippingFallbackEnabled: current });
 });
 
 // Update pricing config and optionally recalc/sync prices
