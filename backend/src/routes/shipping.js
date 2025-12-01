@@ -2,6 +2,7 @@ import express from 'express';
 import { cjClient } from '../services/cjClient.js';
 import pool from '../db.js';
 import { authenticateToken } from '../middleware/auth.js';
+import { isShippingFallbackEnabled } from '../services/configService.js';
 
 export const router = express.Router();
 
@@ -90,12 +91,45 @@ router.post('/quote', optionalAuth, async (req, res) => {
     // Convert USD to ZAR (approximate rate, update periodically)
     const USD_TO_ZAR = 19.0; // Updated exchange rate
 
-    // Map CJ quotes to include ZAR conversion only; no fallback
+    const fallbackEnabled = isShippingFallbackEnabled();
+
+    // Optional fallback based on cart subtotal (orderValue)
+    const computeFallbackShipping = (subtotal) => {
+      const v = Number(subtotal || 0);
+      if (v <= 0) return 250;
+      if (v < 500) return 250;
+      if (v < 1000) return 350;
+      if (v < 2000) return 500;
+      if (v < 4000) return 650;
+      const extraBlocks = Math.floor((v - 4000) / 1000);
+      return 650 + (extraBlocks * 100);
+    };
+
+    // Map CJ quotes and, if enabled, apply fallback when zero/low
     const quotesWithZAR = quotes.map(q => {
       const priceUSD = Number(q.totalPostage || 0);
-      const priceZAR = Math.ceil(priceUSD * USD_TO_ZAR * 100) / 100;
+      let priceZAR = Math.ceil(priceUSD * USD_TO_ZAR * 100) / 100;
+      if (fallbackEnabled && priceZAR < 250) {
+        const fb = computeFallbackShipping(orderValue);
+        console.warn(`⚠️ CJ returned low/zero shipping cost (${priceZAR} ZAR). Using fallback R${fb}`);
+        priceZAR = fb;
+        return { ...q, priceZAR, priceUSD, isFallback: true };
+      }
       return { ...q, priceZAR, priceUSD, isFallback: false };
     });
+
+    // If enabled and CJ returned no methods, synthesize one fallback quote
+    if (fallbackEnabled && (!quotesWithZAR || quotesWithZAR.length === 0)) {
+      const fallbackZAR = computeFallbackShipping(orderValue);
+      console.warn(`⚠️ CJ returned no shipping methods. Using synthesized fallback: R${fallbackZAR}`);
+      quotesWithZAR.push({
+        logisticName: 'Estimated Standard',
+        deliveryDay: '15-25',
+        priceUSD: 0,
+        priceZAR: fallbackZAR,
+        isFallback: true
+      });
+    }
 
     // Calculate insurance cost (3% of order value, min R25, max R500)
     const insuranceData = orderValue ? {
