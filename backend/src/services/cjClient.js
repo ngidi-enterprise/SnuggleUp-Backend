@@ -523,13 +523,40 @@ export const cjClient = {
       console.log('📋 Available fields:', Object.keys(list[0] || {}));
     }
     
-    return list.map((m) => ({
-      logisticName: m.logisticName || m.name,
-      totalPostage: Number(m.totalPostage || m.postage || m.freight || m.price || 0),
-      deliveryDay: m.deliveryDay || m.aging || m.deliveryTime || null,
-      currency: m.currency || 'USD',
-      tracking: m.tracking || m.trackingType || undefined,
-    }));
+    return list.map((m) => {
+      // Try all possible price fields from CJ API
+      const price = Number(
+        m.totalPostageFee || 
+        m.logisticPrice || 
+        m.postage || 
+        m.totalPostage || 
+        m.freight || 
+        m.price || 
+        0
+      );
+      
+      // Add remote fees if present
+      const remoteFee = Number(m.remoteFee || m.remoteFeeCNY || 0);
+      const totalPrice = price + remoteFee;
+      
+      console.log(`💰 ${m.logisticName}: totalPostageFee=${m.totalPostageFee}, logisticPrice=${m.logisticPrice}, postage=${m.postage}, remoteFee=${m.remoteFee}, computed total=${totalPrice}`);
+      
+      return {
+        logisticName: m.logisticName || m.name,
+        totalPostage: totalPrice,
+        deliveryDay: m.deliveryDay || m.logisticAging || m.aging || m.deliveryTime || null,
+        currency: m.currency || 'USD',
+        tracking: m.tracking || m.trackingType || undefined,
+        // Include raw price breakdown for debugging
+        _debug: {
+          totalPostageFee: m.totalPostageFee,
+          logisticPrice: m.logisticPrice,
+          postage: m.postage,
+          remoteFee: m.remoteFee,
+          allFields: Object.keys(m)
+        }
+      };
+    });
   },
 
   // Webhook verification
