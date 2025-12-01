@@ -84,7 +84,8 @@ router.post('/quote', optionalAuth, async (req, res) => {
       products: cjProducts
     });
     
-    console.log('📦 CJ freight API response:', JSON.stringify(quotes, null, 2));
+    console.log('📦 CJ freight API raw response:', JSON.stringify(quotes, null, 2));
+    console.log('📦 First quote details:', quotes[0] || 'NO QUOTES');
 
     // Convert USD to ZAR (approximate rate, update periodically)
     const USD_TO_ZAR = 19.0; // Updated exchange rate
