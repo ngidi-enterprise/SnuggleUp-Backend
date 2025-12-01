@@ -90,46 +90,12 @@ router.post('/quote', optionalAuth, async (req, res) => {
     // Convert USD to ZAR (approximate rate, update periodically)
     const USD_TO_ZAR = 19.0; // Updated exchange rate
 
-    // Intelligent fallback based on cart subtotal (orderValue)
-    const computeFallbackShipping = (subtotal) => {
-      const v = Number(subtotal || 0);
-      if (v <= 0) return 250; // default minimal fallback when subtotal missing
-      if (v < 500) return 250;
-      if (v < 1000) return 350;
-      if (v < 2000) return 500;
-      if (v < 4000) return 650;
-      // Over R4000: R650 + R100 per additional R1000 (rounded down)
-      const extraBlocks = Math.floor((v - 4000) / 1000);
-      return 650 + (extraBlocks * 100);
-    };
-
+    // Map CJ quotes to include ZAR conversion only; no fallback
     const quotesWithZAR = quotes.map(q => {
       const priceUSD = Number(q.totalPostage || 0);
-      let priceZAR = Math.ceil(priceUSD * USD_TO_ZAR * 100) / 100;
-
-      // If CJ returns 0 or very low price, use intelligent subtotal-based fallback
-      if (priceZAR < 250) {
-        const fallback = computeFallbackShipping(orderValue);
-        console.warn(`⚠️ CJ returned low/zero shipping cost (${priceZAR} ZAR). Using fallback based on subtotal R${orderValue}: R${fallback}`);
-        priceZAR = fallback;
-        return { ...q, priceZAR, priceUSD, isFallback: true };
-      }
-
+      const priceZAR = Math.ceil(priceUSD * USD_TO_ZAR * 100) / 100;
       return { ...q, priceZAR, priceUSD, isFallback: false };
     });
-
-    // If CJ returned no methods at all, synthesize a single fallback quote
-    if (!quotesWithZAR || quotesWithZAR.length === 0) {
-      const fallbackZAR = computeFallbackShipping(orderValue);
-      console.warn(`⚠️ CJ returned no shipping methods. Using synthesized fallback quote based on subtotal R${orderValue}: R${fallbackZAR}`);
-      quotesWithZAR.push({
-        logisticName: 'Estimated Standard',
-        deliveryDay: '15-25',
-        priceUSD: 0,
-        priceZAR: fallbackZAR,
-        isFallback: true
-      });
-    }
 
     // Calculate insurance cost (3% of order value, min R25, max R500)
     const insuranceData = orderValue ? {
