@@ -52,11 +52,20 @@ router.post('/quote', optionalAuth, async (req, res) => {
       quantity: item.quantity || 1
     }));
 
+    console.log('📦 Raw cart items received:', items.map(i => ({
+      cj_vid: i.cj_vid,
+      quantity: i.quantity,
+      has_vid: !!i.cj_vid
+    })));
+
     // Validate all items have cj_vid
     const missingVid = cjProducts.find(p => !p.vid);
     if (missingVid) {
+      console.error('❌ Missing cj_vid in cart items!');
+      console.error('Items received:', JSON.stringify(items, null, 2));
       return res.status(400).json({ 
-        error: 'All items must have cj_vid (variant ID)' 
+        error: 'Cart items missing shipping data. Products need to be re-added from store.',
+        details: 'Missing CJ variant ID (cj_vid) - products may have been added before being linked to supplier'
       });
     }
 
