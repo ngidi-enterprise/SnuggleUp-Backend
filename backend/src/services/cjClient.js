@@ -516,10 +516,17 @@ export const cjClient = {
 
     // Normalize into a friendly array
     const list = Array.isArray(json.data) ? json.data : (json.data.list || []);
+    
+    console.log('📋 CJ freight data (before normalization):', JSON.stringify(list, null, 2));
+    if (list.length > 0) {
+      console.log('📋 First freight item raw:', list[0]);
+      console.log('📋 Available fields:', Object.keys(list[0] || {}));
+    }
+    
     return list.map((m) => ({
       logisticName: m.logisticName || m.name,
-      totalPostage: Number(m.totalPostage || m.postage || 0),
-      deliveryDay: m.deliveryDay || m.aging || null,
+      totalPostage: Number(m.totalPostage || m.postage || m.freight || m.price || 0),
+      deliveryDay: m.deliveryDay || m.aging || m.deliveryTime || null,
       currency: m.currency || 'USD',
       tracking: m.tracking || m.trackingType || undefined,
     }));
