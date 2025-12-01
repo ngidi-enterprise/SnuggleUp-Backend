@@ -100,13 +100,66 @@ router.get('/debug/check-vids', async (req, res) => {
         id: p.id,
         name: p.product_name?.substring(0, 50),
         cj_pid: p.cj_pid,
-        cj_vid: p.cj_vid ? p.cj_vid.substring(0, 20) + '...' : null,
+        cj_vid: p.cj_vid,  // Show full VID
         has_vid: p.has_vid
       }))
     });
   } catch (error) {
     console.error('Check VIDs error:', error);
     res.status(500).json({ error: 'Failed to check VIDs' });
+  }
+});
+
+// DEBUG endpoint - Test shipping quote for ONE product
+router.get('/debug/test-shipping/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { cjClient } = await import('../services/cjClient.js');
+    
+    // Get product
+    const result = await pool.query(`
+      SELECT id, product_name, cj_pid, cj_vid
+      FROM curated_products 
+      WHERE id = $1 AND is_active = TRUE
+    `, [id]);
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: 'Product not found' });
+    }
+
+    const product = result.rows[0];
+
+    if (!product.cj_vid) {
+      return res.status(400).json({ error: 'Product missing cj_vid' });
+    }
+
+    // Test CJ freight quote
+    console.log(`🧪 Testing shipping for product ${id}: ${product.product_name}`);
+    console.log(`📦 Using VID: ${product.cj_vid}`);
+
+    const quotes = await cjClient.getFreightQuote({
+      startCountryCode: 'CN',
+      endCountryCode: 'ZA',
+      products: [{ vid: product.cj_vid, quantity: 1 }]
+    });
+
+    res.json({
+      product: {
+        id: product.id,
+        name: product.product_name,
+        cj_pid: product.cj_pid,
+        cj_vid: product.cj_vid
+      },
+      cj_response: quotes,
+      quote_count: quotes?.length || 0,
+      has_quotes: quotes && quotes.length > 0
+    });
+  } catch (error) {
+    console.error('Test shipping error:', error);
+    res.status(500).json({ 
+      error: 'Failed to test shipping',
+      details: error.message
+    });
   }
 });
 
