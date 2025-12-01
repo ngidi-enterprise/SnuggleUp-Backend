@@ -1062,3 +1062,94 @@ router.get('/orders', async (req, res) => {
   }
 });
 
+// Auto-fix missing cj_vid by fetching from CJ API
+// POST /api/admin/products/fix-missing-vids
+router.post('/products/fix-missing-vids', async (req, res) => {
+  try {
+    // Find all products with cj_pid but no cj_vid
+    const result = await pool.query(`
+      SELECT id, cj_pid, product_name 
+      FROM curated_products 
+      WHERE cj_pid IS NOT NULL AND (cj_vid IS NULL OR cj_vid = '')
+      AND is_active = TRUE
+      LIMIT 50
+    `);
+
+    if (result.rows.length === 0) {
+      return res.json({ 
+        success: true, 
+        message: 'All active products already have cj_vid',
+        fixed: 0,
+        failed: 0
+      });
+    }
+
+    console.log(`[admin] Found ${result.rows.length} products missing cj_vid, fetching from CJ...`);
+
+    const fixed = [];
+    const failed = [];
+
+    for (const product of result.rows) {
+      try {
+        // Fetch product details from CJ
+        const cjProduct = await cjClient.getProductDetails(product.cj_pid);
+        
+        if (!cjProduct || !cjProduct.variants || cjProduct.variants.length === 0) {
+          failed.push({ 
+            id: product.id, 
+            name: product.product_name, 
+            reason: 'No variants found in CJ' 
+          });
+          continue;
+        }
+
+        // Use first variant (default)
+        const defaultVariant = cjProduct.variants[0];
+        
+        if (!defaultVariant.vid) {
+          failed.push({ 
+            id: product.id, 
+            name: product.product_name, 
+            reason: 'Variant missing VID' 
+          });
+          continue;
+        }
+
+        // Update product with cj_vid
+        await pool.query(`
+          UPDATE curated_products 
+          SET cj_vid = $1, updated_at = NOW() 
+          WHERE id = $2
+        `, [defaultVariant.vid, product.id]);
+
+        fixed.push({ 
+          id: product.id, 
+          name: product.product_name, 
+          cj_vid: defaultVariant.vid 
+        });
+
+        console.log(`[admin] ✓ Fixed product ${product.id}: ${product.product_name} -> cj_vid: ${defaultVariant.vid}`);
+
+      } catch (error) {
+        failed.push({ 
+          id: product.id, 
+          name: product.product_name, 
+          reason: error.message 
+        });
+        console.error(`[admin] Failed to fix product ${product.id}:`, error.message);
+      }
+    }
+
+    res.json({
+      success: true,
+      message: `Fixed ${fixed.length} products, ${failed.length} failed`,
+      fixed,
+      failed
+    });
+
+  } catch (error) {
+    console.error('[admin] Fix missing VIDs error:', error);
+    res.status(500).json({ error: 'Failed to fix missing VIDs' });
+  }
+});
+
