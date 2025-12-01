@@ -323,6 +323,14 @@ export const cjClient = {
       weight: product.productWeight,
       categoryId: product.categoryId,
       categoryName: product.categoryName,
+      // Rich product specifications
+      material: product.material || '',
+      productAttributes: product.productAttributes || '',
+      packageSize: product.packageSize || '',
+      productFeatures: product.productFeatures || '',
+      packingList: product.packingList || '',
+      // Additional images
+      images: (product.productImages || []).map(img => normalizeUrl(img)),
       variants: (product.variants || []).map((v) => ({
         vid: v.vid,
         pid: v.pid,
@@ -484,15 +492,26 @@ export const cjClient = {
     };
     if (postalCode) body.postCode = postalCode; // CJ sometimes uses postCode
 
+    console.log('📤 Sending to CJ freight API:', JSON.stringify(body, null, 2));
+    
     const json = await http('POST', url, {
       body,
       headers: { 'CJ-Access-Token': accessToken },
     });
 
-    console.log('🔍 CJ freightCalculate raw response:', JSON.stringify(json, null, 2));
+    console.log('📥 CJ freightCalculate raw response:', JSON.stringify(json, null, 2));
 
-    if (!json.result || !json.data) {
-      throw new Error('CJ getFreightQuote failed: ' + (json.message || 'Unknown error'));
+    if (!json.result) {
+      const errorMsg = `CJ freight API error: ${json.message || json.msg || 'Unknown error'} (code: ${json.code || 'none'})`;
+      console.error('❌', errorMsg);
+      console.error('Request was:', JSON.stringify(body, null, 2));
+      throw new Error(errorMsg);
+    }
+    
+    if (!json.data) {
+      console.warn('⚠️ CJ returned success but no data:', json);
+      // Return empty array to trigger fallback
+      return [];
     }
 
     // Normalize into a friendly array
