@@ -750,7 +750,7 @@ router.get('/cj-products/search', async (req, res) => {
         pageSize: pageSize ? Number(pageSize) : 20,
       });
       
-      // Normalize and FILTER for CN warehouse availability
+      // Normalize items (don't filter here - validation happens on add)
       const normalizedItems = (result.items || []).map(item => {
         const origin = item.originCountry || item.fromCountryCode || item.countryCode || item.sourceCountryCode || 'CN';
         return {
@@ -759,17 +759,9 @@ router.get('/cj-products/search', async (req, res) => {
           originCountry: origin,
           suggestedRetailZAR: Math.round((Number(item.price) * USD_TO_ZAR * PRICE_MARKUP) * 100) / 100
         };
-      }).filter(i => {
-        // Only show products from CN (China) warehouses
-        // CJ API should return CN products due to fromCountryCode param, but double-check here
-        const isFromCN = !i.originCountry || i.originCountry === 'CN';
-        if (!isFromCN) {
-          console.log(`🚫 Filtered out non-CN product: ${i.pid} (origin: ${i.originCountry})`);
-        }
-        return isFromCN;
       });
       
-      console.log(`📋 CJ Search returned ${result.items?.length || 0} items, filtered to ${normalizedItems.length} CN products`);
+      console.log(`📋 CJ Search returned ${normalizedItems.length} products`);
       
       res.json({
         ...result,
