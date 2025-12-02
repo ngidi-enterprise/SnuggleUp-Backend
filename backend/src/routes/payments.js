@@ -49,6 +49,45 @@ router.post('/create', optionalAuth, async (req, res) => {
     // Generate unique order number
     const orderNumber = `ORDER-${Date.now()}`;
     
+    // Validate stock availability before payment - require CJ stock >= 20
+    if (orderItems && orderItems.length > 0) {
+      const productIds = orderItems.map(item => {
+        const id = String(item.id || '').replace('curated-', '');
+        return parseInt(id);
+      }).filter(id => !isNaN(id));
+      
+      if (productIds.length > 0) {
+        const { default: pool } = await import('../db.js');
+        const stockResult = await pool.query(`
+          SELECT 
+            cp.id,
+            cp.product_name,
+            COALESCE(SUM(cpi.cj_inventory), 0) as total_cj_stock
+          FROM curated_products cp
+          LEFT JOIN curated_product_inventories cpi ON cp.id = cpi.curated_product_id
+          WHERE cp.id = ANY($1::int[])
+          GROUP BY cp.id, cp.product_name
+        `, [productIds]);
+        
+        const soldOutItems = [];
+        for (const row of stockResult.rows) {
+          const cjStock = Number(row.total_cj_stock) || 0;
+          // Products with CJ stock < 20 are considered sold out
+          if (cjStock < 20) {
+            soldOutItems.push(row.product_name);
+          }
+        }
+        
+        if (soldOutItems.length > 0) {
+          return res.status(400).json({
+            error: 'Cannot complete payment - some items are sold out',
+            soldOutItems,
+            message: `The following items are currently sold out (less than 20 in stock) and cannot be purchased: ${soldOutItems.join(', ')}. Please remove them from your cart.`
+          });
+        }
+      }
+    }
+
     // Create order record in database (with pending status)
     const userId = req.user?.userId || 'guest';
     // Merge/derive shipping details: allow frontend-provided values, fallback to user name when available
