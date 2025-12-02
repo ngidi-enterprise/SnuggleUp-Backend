@@ -70,16 +70,41 @@ router.post('/quote', optionalAuth, async (req, res) => {
       });
     }
 
+    // Determine origin country by checking warehouse inventory for the first product
+    // (CJ requires all products in a single quote request to ship from same country)
+    let originCountry = 'CN'; // Default to China
+    
+    try {
+      const firstVid = cjProducts[0].vid;
+      const warehouseCheck = await pool.query(`
+        SELECT country_code, cj_inventory 
+        FROM curated_product_inventories 
+        WHERE cj_vid = $1 AND cj_inventory > 0
+        ORDER BY cj_inventory DESC 
+        LIMIT 1
+      `, [firstVid]);
+      
+      if (warehouseCheck.rows.length > 0) {
+        originCountry = warehouseCheck.rows[0].country_code;
+        console.log(`🌍 Detected origin country: ${originCountry} for vid ${firstVid}`);
+      } else {
+        console.warn(`⚠️ No warehouse inventory found for vid ${firstVid}, defaulting to CN`);
+      }
+    } catch (err) {
+      console.error('Error detecting origin country:', err.message);
+      // Continue with CN default
+    }
+
     // Call CJ freight calculator
     console.log('🚢 Calling CJ freight API with:', {
-      startCountryCode: 'CN',
+      startCountryCode: originCountry,
       endCountryCode: shippingCountry,
       postalCode,
       products: cjProducts
     });
     
     const quotes = await cjClient.getFreightQuote({
-      startCountryCode: 'CN', // All products ship from China
+      startCountryCode: originCountry,
       endCountryCode: shippingCountry,
       postalCode,
       products: cjProducts
@@ -146,7 +171,7 @@ router.post('/quote', optionalAuth, async (req, res) => {
     res.json({
       quotes: quotesWithZAR,
       shippingCountry,
-      fromCountry: 'CN',
+      fromCountry: originCountry,
       insurance: insuranceData
     });
 
