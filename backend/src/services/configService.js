@@ -2,7 +2,7 @@
 // Note: This resets on server restart. Persist to DB later if needed.
 
 const runtimeConfig = {
-  shippingFallbackEnabled: false,
+  shippingFallbackEnabled: false, // Disabled - only use real CJ shipping quotes
 };
 
 export function isShippingFallbackEnabled() {
