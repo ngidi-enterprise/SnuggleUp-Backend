@@ -112,47 +112,33 @@ router.post('/quote', optionalAuth, async (req, res) => {
     
     console.log('📦 CJ freight API raw response:', JSON.stringify(quotes, null, 2));
     console.log('📦 First quote details:', quotes[0] || 'NO QUOTES');
+    console.log(`📊 Quotes count: ${quotes?.length || 0}`);
 
     // Convert USD to ZAR (approximate rate, update periodically)
     const USD_TO_ZAR = 19.0; // Updated exchange rate
 
-    const fallbackEnabled = isShippingFallbackEnabled();
-
-    // Optional fallback based on cart subtotal (orderValue)
-    const computeFallbackShipping = (subtotal) => {
-      const v = Number(subtotal || 0);
-      if (v <= 0) return 250;
-      if (v < 500) return 250;
-      if (v < 1000) return 350;
-      if (v < 2000) return 500;
-      if (v < 4000) return 650;
-      const extraBlocks = Math.floor((v - 4000) / 1000);
-      return 650 + (extraBlocks * 100);
-    };
-
-    // Map CJ quotes and, if enabled, apply fallback when zero/low
+    // Convert CJ quotes to ZAR without any fallback manipulation
     const quotesWithZAR = quotes.map(q => {
       const priceUSD = Number(q.totalPostage || 0);
-      let priceZAR = Math.ceil(priceUSD * USD_TO_ZAR * 100) / 100;
-      if (fallbackEnabled && priceZAR < 250) {
-        const fb = computeFallbackShipping(orderValue);
-        console.warn(`⚠️ CJ returned low/zero shipping cost (${priceZAR} ZAR). Using fallback R${fb}`);
-        priceZAR = fb;
-        return { ...q, priceZAR, priceUSD, isFallback: true };
+      const priceZAR = Math.ceil(priceUSD * USD_TO_ZAR * 100) / 100;
+      
+      if (priceZAR === 0 || priceUSD === 0) {
+        console.warn(`⚠️ ${q.logisticName} has ZERO cost from CJ API - this is CJ data issue, not a code bug`);
+        console.warn(`   Raw CJ response for this method:`, JSON.stringify(q, null, 2));
       }
-      return { ...q, priceZAR, priceUSD, isFallback: false };
+      
+      return { ...q, priceZAR, priceUSD };
     });
 
-    // If enabled and CJ returned no methods, synthesize one fallback quote
-    if (fallbackEnabled && (!quotesWithZAR || quotesWithZAR.length === 0)) {
-      const fallbackZAR = computeFallbackShipping(orderValue);
-      console.warn(`⚠️ CJ returned no shipping methods. Using synthesized fallback: R${fallbackZAR}`);
-      quotesWithZAR.push({
-        logisticName: 'Estimated Standard',
-        deliveryDay: '15-25',
-        priceUSD: 0,
-        priceZAR: fallbackZAR,
-        isFallback: true
+    // If CJ returned no shipping methods at all, return empty quotes with explanation
+    if (!quotesWithZAR || quotesWithZAR.length === 0) {
+      console.error(`❌ CJ returned ZERO shipping methods for route ${originCountry} → ${shippingCountry}`);
+      console.error(`   This means CJ does not support shipping from this warehouse to destination`);
+      return res.status(400).json({
+        error: 'No shipping methods available',
+        quotes: [],
+        reason: `Supplier does not ship from ${originCountry} to ${shippingCountry}`,
+        suggestion: 'Product may need to be sourced from a different warehouse'
       });
     }
 
