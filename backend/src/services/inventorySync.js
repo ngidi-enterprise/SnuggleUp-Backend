@@ -68,11 +68,14 @@ export async function syncCuratedInventory({ limit, syncType = 'scheduled' } = {
         // Only deactivate if explicitly set by admin or product has other issues
         const shouldBeActive = true; // Always keep active to show out of stock items
         
-        // Store CJ warehouse stock as stock_quantity (NOT factory inventory)
-        // When cjStock = 0, stock_quantity will be 0 and product shows as "OUT OF STOCK" on frontend
+        // Store stock_quantity based on threshold:
+        // - If CJ stock ≤ 20: set stock_quantity = 0 (shows "OUT OF STOCK" badge)
+        // - If CJ stock > 20: set stock_quantity = actual CJ stock
+        const stockQuantity = cjStock <= 20 ? 0 : cjStock;
+        
         await pool.query(
           'UPDATE curated_products SET stock_quantity = $1, is_active = $2, updated_at = NOW() WHERE id = $3',
-          [cjStock, shouldBeActive, id]
+          [stockQuantity, shouldBeActive, id]
         );
 
         // Upsert warehouse rows; simplest strategy: delete old rows then insert
