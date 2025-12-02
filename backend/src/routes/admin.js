@@ -285,8 +285,36 @@ router.post('/products', async (req, res) => {
     if (resolvedVid) {
       try {
         const inventory = await cjClient.getInventory(resolvedVid);
-        stockQuantity = inventory.reduce((sum, w) => sum + (Number(w.totalInventory) || 0), 0);
-        console.log(`📦 Fetched initial stock for ${cj_pid}: ${stockQuantity}`);
+        
+        // CRITICAL: Check if product has inventory in China (CN) warehouse
+        // CJ's shipping API only has reliable pricing for CN → worldwide routes
+        const cnWarehouses = inventory.filter(w => w.countryCode === 'CN');
+        const nonCnWarehouses = inventory.filter(w => w.countryCode !== 'CN');
+        const cnStock = cnWarehouses.reduce((sum, w) => sum + (Number(w.cjInventory) || 0), 0);
+        const totalStock = inventory.reduce((sum, w) => sum + (Number(w.totalInventory) || 0), 0);
+        
+        console.log(`🌍 Warehouse analysis for ${cj_pid}:`);
+        console.log(`   CN warehouses: ${cnWarehouses.length} (${cnStock} units available)`);
+        console.log(`   Non-CN warehouses: ${nonCnWarehouses.map(w => w.countryCode).join(', ')}`);
+        
+        // Warn if product has NO China warehouse inventory
+        if (cnStock === 0 && nonCnWarehouses.length > 0) {
+          const countries = [...new Set(nonCnWarehouses.map(w => w.countryCode))].join(', ');
+          console.warn(`⚠️ WARNING: Product ${cj_pid} only ships from non-CN warehouses (${countries})`);
+          console.warn(`   CJ's shipping API often returns R0 pricing for non-CN origins`);
+          return res.status(400).json({ 
+            error: 'Product not suitable for South Africa market',
+            reason: `This product only ships from ${countries} warehouses. CJ does not provide shipping quotes for ${countries} → ZA routes.`,
+            suggestion: 'Please select products that ship from China (CN) warehouses for reliable pricing.',
+            warehouseDetails: {
+              cnStock,
+              nonCnWarehouses: nonCnWarehouses.map(w => ({ country: w.countryCode, stock: w.cjInventory }))
+            }
+          });
+        }
+        
+        stockQuantity = totalStock;
+        console.log(`📦 Fetched initial stock for ${cj_pid}: ${stockQuantity} (${cnStock} from CN)`);
         
         // Insert product first to get the ID
         const result = await pool.query(`
