@@ -43,7 +43,7 @@ router.get('/', async (req, res) => {
 
     const result = await pool.query(query, params);
 
-    // Group by product id to merge multiple warehouses (if any)
+    // Group by product id to merge multiple warehouses and calculate CJ stock
     const productsMap = {};
     for (const row of result.rows) {
       if (!productsMap[row.id]) {
@@ -56,6 +56,32 @@ router.get('/', async (req, res) => {
         });
       }
     }
+    
+    // Get CJ stock totals from inventory table and mark as sold out if < 20
+    const productIds = Object.keys(productsMap);
+    if (productIds.length > 0) {
+      const inventoryResult = await pool.query(`
+        SELECT curated_product_id, SUM(cj_inventory) as total_cj_stock
+        FROM curated_product_inventories
+        WHERE curated_product_id = ANY($1::int[])
+        GROUP BY curated_product_id
+      `, [productIds]);
+      
+      const stockMap = {};
+      for (const inv of inventoryResult.rows) {
+        stockMap[inv.curated_product_id] = Number(inv.total_cj_stock) || 0;
+      }
+      
+      // Apply stock rules: CJ stock = 0 means sold out (ignore factory stock)
+      for (const [id, product] of Object.entries(productsMap)) {
+        const cjStock = stockMap[id] || 0;
+        // If CJ warehouse has 0 stock, mark as sold out regardless of stock_quantity
+        if (cjStock === 0) {
+          product.stock_quantity = 0; // Mark as sold out
+        }
+      }
+    }
+    
     const products = Object.values(productsMap);
 
     res.json({
