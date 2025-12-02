@@ -76,8 +76,8 @@ router.post('/', async (req, res) => {
         for (const row of stockResult.rows) {
           const cjStock = Number(row.total_cj_stock) || 0;
           stockMap[row.id] = cjStock;
-          // Products with CJ stock < 20 are considered sold out
-          if (cjStock < 20) {
+          // Products with CJ stock = 0 are sold out (factory stock doesn't count)
+          if (cjStock === 0) {
             soldOutItems.push(row.product_name);
           }
         }
@@ -86,7 +86,7 @@ router.post('/', async (req, res) => {
           return res.status(400).json({
             error: 'Some items in your cart are sold out',
             soldOutItems,
-            message: `The following items are currently sold out (less than 20 in stock) and cannot be purchased: ${soldOutItems.join(', ')}`
+            message: `The following items are currently sold out (not available at supplier warehouse) and cannot be purchased: ${soldOutItems.join(', ')}`
           });
         }
       }
