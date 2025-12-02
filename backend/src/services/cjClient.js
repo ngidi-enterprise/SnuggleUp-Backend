@@ -524,26 +524,55 @@ export const cjClient = {
     }
     
     return list.map((m) => {
-      // Try all possible price fields from CJ API
-      const price = Number(
-        m.totalPostageFee || 
-        m.logisticPrice || 
-        m.postage || 
-        m.totalPostage || 
-        m.freight || 
-        m.price || 
-        0
-      );
+      // Log ALL fields from CJ response to diagnose pricing issue
+      console.log(`\n🔍 RAW CJ RESPONSE FOR ${m.logisticName}:`, JSON.stringify(m, null, 2));
       
-      // Add remote fees if present
-      const remoteFee = Number(m.remoteFee || m.remoteFeeCNY || 0);
-      const totalPrice = price + remoteFee;
+      // Try all possible price fields from CJ API (they use different fields in different scenarios)
+      const totalPostageFee = Number(m.totalPostageFee || 0);
+      const logisticPrice = Number(m.logisticPrice || 0);
+      const postage = Number(m.postage || 0);
+      const totalPostage = Number(m.totalPostage || 0);
+      const freight = Number(m.freight || 0);
+      const price = Number(m.price || 0);
+      const logisticPriceCn = Number(m.logisticPriceCn || 0);
+      const postageCNY = Number(m.postageCNY || 0);
       
-      console.log(`💰 ${m.logisticName}: totalPostageFee=${m.totalPostageFee}, logisticPrice=${m.logisticPrice}, postage=${m.postage}, remoteFee=${m.remoteFee}, computed total=${totalPrice}`);
+      // Remote/zone fees
+      const remoteFee = Number(m.remoteFee || 0);
+      const remoteFeeCNY = Number(m.remoteFeeCNY || 0);
+      const zonePrice = Number(m.zonePrice || 0);
+      
+      // Additional fees
+      const taxesFee = Number(m.taxesFee || 0);
+      const clearanceFee = Number(m.clearanceOperationFee || 0);
+      
+      console.log(`💰 PRICE FIELDS FOR ${m.logisticName}:`);
+      console.log(`   totalPostageFee: ${totalPostageFee}`);
+      console.log(`   logisticPrice: ${logisticPrice}`);
+      console.log(`   postage: ${postage}`);
+      console.log(`   totalPostage: ${totalPostage}`);
+      console.log(`   freight: ${freight}`);
+      console.log(`   price: ${price}`);
+      console.log(`   logisticPriceCn: ${logisticPriceCn}`);
+      console.log(`   postageCNY: ${postageCNY}`);
+      console.log(`   remoteFee: ${remoteFee}`);
+      console.log(`   remoteFeeCNY: ${remoteFeeCNY}`);
+      console.log(`   zonePrice: ${zonePrice}`);
+      console.log(`   taxesFee: ${taxesFee}`);
+      console.log(`   clearanceFee: ${clearanceFee}`);
+      
+      // Pick the first non-zero price field (priority order)
+      let finalPrice = totalPostageFee || logisticPrice || postage || totalPostage || 
+                       freight || price || logisticPriceCn || postageCNY || zonePrice || 0;
+      
+      // Add all additional fees
+      finalPrice += remoteFee + remoteFeeCNY + taxesFee + clearanceFee;
+      
+      console.log(`   ✅ FINAL COMPUTED PRICE: ${finalPrice} USD\n`);
       
       return {
         logisticName: m.logisticName || m.name,
-        totalPostage: totalPrice,
+        totalPostage: finalPrice,
         deliveryDay: m.deliveryDay || m.logisticAging || m.aging || m.deliveryTime || null,
         currency: m.currency || 'USD',
         tracking: m.tracking || m.trackingType || undefined,
