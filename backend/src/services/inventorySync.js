@@ -64,12 +64,12 @@ export async function syncCuratedInventory({ limit, syncType = 'scheduled' } = {
         // Calculate CJ warehouse stock only (ready to ship) - IGNORE factory stock
         const cjStock = inventory.reduce((sum, w) => sum + (Number(w.cjInventory) || 0), 0);
         
-        // CRITICAL: Only use CJ warehouse stock for stock_quantity (not factory)
-        // Factory stock is not ready to ship and should be ignored
-        // If CJ stock is 0, mark as out of stock regardless of factory inventory
-        const shouldBeActive = cjStock > 0;
+        // CRITICAL: Keep products active even if out of stock - they still show on storefront with "OUT OF STOCK" badge
+        // Only deactivate if explicitly set by admin or product has other issues
+        const shouldBeActive = true; // Always keep active to show out of stock items
         
-        // Store CJ warehouse stock as stock_quantity (NOT total inventory)
+        // Store CJ warehouse stock as stock_quantity (NOT factory inventory)
+        // When cjStock = 0, stock_quantity will be 0 and product shows as "OUT OF STOCK" on frontend
         await pool.query(
           'UPDATE curated_products SET stock_quantity = $1, is_active = $2, updated_at = NOW() WHERE id = $3',
           [cjStock, shouldBeActive, id]
