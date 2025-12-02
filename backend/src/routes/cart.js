@@ -76,8 +76,8 @@ router.post('/', async (req, res) => {
         for (const row of stockResult.rows) {
           const cjStock = Number(row.total_cj_stock) || 0;
           stockMap[row.id] = cjStock;
-          // Products with CJ stock = 0 are sold out (factory stock doesn't count)
-          if (cjStock === 0) {
+          // Products with CJ stock ≤20 are sold out (low stock threshold)
+          if (cjStock <= 20) {
             soldOutItems.push(row.product_name);
           }
         }
