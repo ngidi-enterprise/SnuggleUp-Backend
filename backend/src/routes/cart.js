@@ -51,6 +51,47 @@ router.post('/', async (req, res) => {
       return res.status(400).json({ error: 'Items must be an array' });
     }
 
+    // Validate stock availability for all items - require CJ stock >= 20
+    if (items.length > 0) {
+      const productIds = items.map(item => {
+        const id = String(item.id || '').replace('curated-', '');
+        return parseInt(id);
+      }).filter(id => !isNaN(id));
+      
+      if (productIds.length > 0) {
+        // Get CJ stock for all products in cart
+        const stockResult = await pool.query(`
+          SELECT 
+            cp.id,
+            cp.product_name,
+            COALESCE(SUM(cpi.cj_inventory), 0) as total_cj_stock
+          FROM curated_products cp
+          LEFT JOIN curated_product_inventories cpi ON cp.id = cpi.curated_product_id
+          WHERE cp.id = ANY($1::int[])
+          GROUP BY cp.id, cp.product_name
+        `, [productIds]);
+        
+        const soldOutItems = [];
+        const stockMap = {};
+        for (const row of stockResult.rows) {
+          const cjStock = Number(row.total_cj_stock) || 0;
+          stockMap[row.id] = cjStock;
+          // Products with CJ stock < 20 are considered sold out
+          if (cjStock < 20) {
+            soldOutItems.push(row.product_name);
+          }
+        }
+        
+        if (soldOutItems.length > 0) {
+          return res.status(400).json({
+            error: 'Some items in your cart are sold out',
+            soldOutItems,
+            message: `The following items are currently sold out (less than 20 in stock) and cannot be purchased: ${soldOutItems.join(', ')}`
+          });
+        }
+      }
+    }
+
     // Upsert cart (insert or update if exists)
     const result = await pool.query(
       `INSERT INTO carts (user_id, items, updated_at)
