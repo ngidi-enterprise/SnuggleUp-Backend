@@ -749,23 +749,27 @@ router.get('/cj-products/search', async (req, res) => {
         pageNum: pageNum ? Number(pageNum) : 1,
         pageSize: pageSize ? Number(pageSize) : 20,
       });
-      // Normalize field names for frontend consistency. We already request CN upstream,
-      // so default originCountry to 'CN' when CJ omits it.
+      
+      // Normalize and FILTER for CN warehouse availability
       const normalizedItems = (result.items || []).map(item => {
-        // Derive origin country from available fields
-        const origin = item.originCountry || item.fromCountryCode || item.countryCode || item.sourceCountryCode || null;
+        const origin = item.originCountry || item.fromCountryCode || item.countryCode || item.sourceCountryCode || 'CN';
         return {
           ...item,
           category: item.categoryName || item.category || 'Baby/Kids',
-          originCountry: origin, // may be null (UNKNOWN) - will be shown in UI
+          originCountry: origin,
           suggestedRetailZAR: Math.round((Number(item.price) * USD_TO_ZAR * PRICE_MARKUP) * 100) / 100
         };
+      }).filter(i => {
+        // Only show products from CN (China) warehouses
+        // CJ API should return CN products due to fromCountryCode param, but double-check here
+        const isFromCN = !i.originCountry || i.originCountry === 'CN';
+        if (!isFromCN) {
+          console.log(`🚫 Filtered out non-CN product: ${i.pid} (origin: ${i.originCountry})`);
+        }
+        return isFromCN;
       });
-      // TEMPORARILY DISABLED CN filter to debug - CJ API not returning origin country field
-      // .filter(i => i.originCountry === 'CN');
       
-      console.log(`📋 CJ Search returned ${normalizedItems.length} items, origin countries:`, 
-        normalizedItems.slice(0, 5).map(i => ({ pid: i.pid, origin: i.originCountry })));
+      console.log(`📋 CJ Search returned ${result.items?.length || 0} items, filtered to ${normalizedItems.length} CN products`);
       
       res.json({
         ...result,
