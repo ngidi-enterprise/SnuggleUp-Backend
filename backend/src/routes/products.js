@@ -163,8 +163,23 @@ router.get('/debug/test-shipping/:id', async (req, res) => {
     console.log(`🧪 Testing shipping for product ${id}: ${product.product_name}`);
     console.log(`📦 Using VID: ${product.cj_vid}`);
 
+    // Detect origin country from warehouse inventory
+    let originCountry = 'CN';
+    const warehouseCheck = await pool.query(`
+      SELECT country_code, cj_inventory 
+      FROM curated_product_inventories 
+      WHERE cj_vid = $1 AND cj_inventory > 0
+      ORDER BY cj_inventory DESC 
+      LIMIT 1
+    `, [product.cj_vid]);
+    
+    if (warehouseCheck.rows.length > 0) {
+      originCountry = warehouseCheck.rows[0].country_code;
+      console.log(`🌍 Detected origin: ${originCountry}`);
+    }
+
     const quotes = await cjClient.getFreightQuote({
-      startCountryCode: 'CN',
+      startCountryCode: originCountry,
       endCountryCode: 'ZA',
       products: [{ vid: product.cj_vid, quantity: 1 }]
     });
