@@ -714,15 +714,30 @@ router.get('/cj-products/search', async (req, res) => {
         }
       }
     } else {
-      // Name-based search
+      // Name-based search - filter to China origin only
       console.log(`🔍 CJ name search: ${q}`);
       const result = await cjClient.searchProducts({
         productNameEn: q,
         pageNum: pageNum ? Number(pageNum) : 1,
         pageSize: pageSize ? Number(pageSize) : 20,
       });
-      // Return raw search results without origin/inventory filters
-      res.json(result || { items: [], total: 0, pageNum: 1, pageSize: 20 });
+      
+      // Filter out non-CN products
+      if (result?.items) {
+        const cnItems = result.items.filter(item => 
+          item.originCountry === 'CN' || item.originCountry === 'China'
+        );
+        console.log(`🇨🇳 Filtered ${result.items.length} results → ${cnItems.length} China products`);
+        res.json({
+          ...result,
+          items: cnItems,
+          total: cnItems.length,
+          filtered: true,
+          originalTotal: result.total
+        });
+      } else {
+        res.json(result || { items: [], total: 0, pageNum: 1, pageSize: 20 });
+      }
     }
   } catch (error) {
     console.error('Supplier product search error:', error);
