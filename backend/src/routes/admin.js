@@ -278,98 +278,60 @@ router.post('/products', async (req, res) => {
 
     console.log(`💰 Cost: $${costUSD} USD → R${costZAR} ZAR, ${custom_suggested_price ? 'custom' : 'default'} retail: R${suggested_price} (${(suggested_price / costZAR).toFixed(2)}x markup)`);
 
-    // Fetch initial stock from CJ if we have a variant ID
-    let stockQuantity = 0;
-    let resolvedVid = cj_vid;
-
-    if (!resolvedVid && cj_pid) {
-      // Try to fetch product details and pick first variant
-      try {
-        const details = await cjClient.getProductDetails(cj_pid);
-        resolvedVid = details?.variants?.[0]?.vid || null;
-      } catch (e) {
-        console.warn('Failed to fetch CJ details for pid', cj_pid, e.message);
-      }
-    }
-
-    if (resolvedVid) {
-      try {
-        const inventory = await cjClient.getInventory(resolvedVid);
-        
-        // Calculate CJ warehouse stock in China (CN) only - ignore factory stock
-        const cnWarehouses = inventory.filter(w => w.countryCode === 'CN');
-        const nonCnWarehouses = inventory.filter(w => w.countryCode !== 'CN');
-        const cnCjStock = cnWarehouses.reduce((sum, w) => sum + (Number(w.cjInventory) || 0), 0);
-        const totalStock = inventory.reduce((sum, w) => sum + (Number(w.totalInventory) || 0), 0);
-        
-        console.log(`🌍 Warehouse analysis for ${cj_pid}:`);
-        console.log(`   CN CJ warehouse stock: ${cnCjStock} units`);
-        console.log(`   Non-CN warehouses: ${nonCnWarehouses.map(w => w.countryCode).join(', ') || 'none'}`);
-        
-        // CRITICAL: Only allow products with sufficient CJ warehouse stock in China
-        // Factory stock is ignored - only CJ warehouse stock counts
-        if (cnCjStock <= 20) {
-          console.warn(`⚠️ WARNING: Product ${cj_pid} has insufficient CJ warehouse stock in China (${cnCjStock} ≤ 20)`);
-          return res.status(400).json({ 
-            error: 'Product not suitable - insufficient CJ warehouse stock',
-            reason: `This product has only ${cnCjStock} units in CJ warehouses in China. Minimum required: 21 units.`,
-            suggestion: 'Please select products with more than 20 units in CJ warehouses (China) for reliable availability.',
-            warehouseDetails: {
-              cnCjStock,
-              threshold: 20,
-              nonCnWarehouses: nonCnWarehouses.map(w => ({ country: w.countryCode, cjStock: w.cjInventory }))
-            }
-          });
-        }
-        
-        console.log(`✅ Product ${cj_pid} approved: ${cnCjStock} units in CN CJ warehouses (> 20)`);
-        stockQuantity = totalStock;
-        console.log(`📦 Fetched initial stock for ${cj_pid}: ${stockQuantity}`);
-        
-        // Insert product first to get the ID
-        const result = await pool.query(`
-          INSERT INTO curated_products 
-          (cj_pid, cj_vid, product_name, original_cj_title, seo_title, product_description, product_material, product_features, package_size, packing_list, product_weight, product_image, cj_cost_price, suggested_price, custom_price, category, stock_quantity)
-          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)
-          RETURNING *
-        `, [cj_pid, resolvedVid, product_name, original_cj_title || product_name, seo_title, product_description, product_material, product_features, package_size, packing_list, product_weight, product_image, costUSD, suggested_price, suggested_price, category, stockQuantity]);
-
-        const curatedProductId = result.rows[0].id;
-
-        // Insert warehouse details
-        for (const wh of inventory) {
-          await pool.query(`
-            INSERT INTO curated_product_inventories 
-            (curated_product_id, cj_pid, cj_vid, warehouse_id, warehouse_name, country_code, total_inventory, cj_inventory, factory_inventory, updated_at)
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, NOW())
-          `, [
-            curatedProductId,
-            cj_pid,
-            resolvedVid,
-            wh.warehouseId,
-            wh.warehouseName,
-            wh.countryCode,
-            wh.totalInventory,
-            wh.cjInventory,
-            wh.factoryInventory
-          ]);
-        }
-
-        return res.status(201).json({ product: result.rows[0] });
-      } catch (e) {
-        console.warn('Failed to fetch initial inventory for vid', resolvedVid, e.message);
-      }
-    }
-
-    // Fallback: insert without inventory if we couldn't fetch it
+    // Fast-path add: do not call CJ in-request to avoid 429 delays
+    // Insert immediately; background job will try to link VID and inventory
+    const stockQuantity = 0;
     const result = await pool.query(`
       INSERT INTO curated_products 
       (cj_pid, cj_vid, product_name, original_cj_title, seo_title, product_description, product_material, product_features, package_size, packing_list, product_weight, product_image, cj_cost_price, suggested_price, custom_price, category, stock_quantity)
       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)
       RETURNING *
-    `, [cj_pid, resolvedVid, product_name, original_cj_title || product_name, seo_title, product_description, product_material, product_features, package_size, packing_list, product_weight, product_image, costUSD, suggested_price, suggested_price, category, stockQuantity]);
+    `, [cj_pid, cj_vid || null, product_name, original_cj_title || product_name, seo_title, product_description, product_material, product_features, package_size, packing_list, product_weight, product_image, costUSD, suggested_price, suggested_price, category, stockQuantity]);
 
-    res.status(201).json({ product: result.rows[0] });
+    const created = result.rows[0];
+
+    // Fire-and-forget: try to resolve VID and inventory without blocking the response
+    ;(async () => {
+      try {
+        let resolvedVid = created.cj_vid;
+        if (!resolvedVid && cj_pid) {
+          const details = await cjClient.getProductDetails(cj_pid);
+          resolvedVid = details?.variants?.[0]?.vid || null;
+          if (resolvedVid) {
+            await pool.query(`UPDATE curated_products SET cj_vid = $1, updated_at = NOW() WHERE id = $2`, [resolvedVid, created.id]);
+          }
+        }
+
+        if (resolvedVid) {
+          const inventory = await cjClient.getInventory(resolvedVid);
+          const totalStock = inventory.reduce((sum, w) => sum + (Number(w.totalInventory) || 0), 0);
+          await pool.query(`UPDATE curated_products SET stock_quantity = $1, updated_at = NOW() WHERE id = $2`, [totalStock, created.id]);
+
+          for (const wh of inventory) {
+            await pool.query(`
+              INSERT INTO curated_product_inventories 
+              (curated_product_id, cj_pid, cj_vid, warehouse_id, warehouse_name, country_code, total_inventory, cj_inventory, factory_inventory, updated_at)
+              VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, NOW())
+            `, [
+              created.id,
+              cj_pid,
+              resolvedVid,
+              wh.warehouseId,
+              wh.warehouseName,
+              wh.countryCode,
+              wh.totalInventory,
+              wh.cjInventory,
+              wh.factoryInventory
+            ]);
+          }
+        }
+      } catch (e) {
+        // Swallow background errors to avoid user-facing failures
+        console.warn('[admin] Background CJ link/inventory fetch failed:', e.message);
+      }
+    })();
+
+    return res.status(201).json({ product: created });
   } catch (error) {
     console.error('Add curated product error:', error);
     if (error.code === '23505') { // Unique violation
