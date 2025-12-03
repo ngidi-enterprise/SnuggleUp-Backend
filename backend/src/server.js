@@ -10,6 +10,8 @@ import { router as setupRouter } from './routes/setup.js';
 import { router as productsRouter } from './routes/products.js';
 import { router as cartRouter } from './routes/cart.js';
 import { router as shippingRouter } from './routes/shipping.js';
+import { router as authRouter } from './routes/auth.js';
+import { router as ordersRouter } from './routes/orders.js';
 import { cjClient } from './services/cjClient.js';
 import { syncCuratedInventory } from './services/inventorySync.js';
 import db from './db.js';
@@ -45,6 +47,7 @@ app.use(express.urlencoded({ extended: false }));
 app.use(express.json());
 
 // Routes
+app.use('/api/auth', authRouter); // Authentication
 app.use('/api/payments', paymentsRouter);
 app.use('/api/cj', cjRouter);
 app.use('/api/admin', adminRouter);
@@ -52,6 +55,7 @@ app.use('/api/setup', setupRouter);
 app.use('/api/products', productsRouter); // Public curated products
 app.use('/api/cart', cartRouter); // Cart persistence
 app.use('/api/shipping', shippingRouter); // Shipping quotes
+app.use('/api/orders', ordersRouter); // Orders
 
 // Health check (legacy)
 app.get('/health', (req, res) => {
