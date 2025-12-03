@@ -249,8 +249,18 @@ router.post('/products', async (req, res) => {
       category 
     } = req.body;
 
-    if (!cj_pid || !product_name || !cj_cost_price) {
-      return res.status(400).json({ error: 'Missing required fields' });
+    // Detailed validation with specific error messages
+    const missingFields = [];
+    if (!cj_pid) missingFields.push('cj_pid');
+    if (!product_name || product_name.trim() === '') missingFields.push('product_name');
+    if (!cj_cost_price) missingFields.push('cj_cost_price');
+    
+    if (missingFields.length > 0) {
+      console.error('[admin] Missing required fields:', missingFields, 'Request body:', req.body);
+      return res.status(400).json({ 
+        error: `Missing required fields: ${missingFields.join(', ')}`,
+        details: { missing: missingFields, received: Object.keys(req.body) }
+      });
     }
 
     // Cost price is in USD from CJ, convert to ZAR
