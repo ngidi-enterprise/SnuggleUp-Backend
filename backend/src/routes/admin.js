@@ -759,10 +759,7 @@ router.get('/cj-products/search', async (req, res) => {
         pageNum: pageNum ? Number(pageNum) : 1,
         pageSize: pageSize ? Number(pageSize) : 20,
       });
-      // Admin-tunable filters via query params
-      const minCnCjStock = Number(req.query.minCnCjStock ?? 21);
-      const allowNonCN = (req.query.allowNonCN ?? 'false').toString().toLowerCase() === 'true';
-      // Normalize and enrich with CN CJ stock; filter by rules
+      // Normalize and enrich with CN CJ stock; filter to cnCjStock > 20
       const rawItems = result.items || [];
       const enriched = [];
       for (const item of rawItems) {
@@ -776,7 +773,6 @@ router.get('/cj-products/search', async (req, res) => {
 
         // Try to fetch CN CJ stock for the first variant
         let cnCjStock = 0;
-        let anyCjStock = 0;
         try {
           // Ensure we have a variant VID: if not present, fetch details
           let vid = item.vid;
@@ -788,38 +784,23 @@ router.get('/cj-products/search', async (req, res) => {
             const inv = await cjClient.getInventory(vid);
             const cnWarehouses = (inv || []).filter(w => w.countryCode === 'CN');
             cnCjStock = cnWarehouses.reduce((sum, w) => sum + (Number(w.cjInventory) || 0), 0);
-            anyCjStock = (inv || []).reduce((sum, w) => sum + (Number(w.cjInventory) || 0), 0);
           }
         } catch (e) {
           console.warn(`⚠️ Failed to fetch CN CJ stock for pid ${item.pid}:`, e.message);
         }
 
         normalized.cnCjStock = cnCjStock;
-        normalized.anyCjStock = anyCjStock;
         enriched.push(normalized);
       }
 
-      // Apply filtering: default requires CN CJ stock >= minCnCjStock; optionally allow non-CN warehouses
-      const filtered = enriched.filter(i => {
-        const cnOk = (i.cnCjStock || 0) >= minCnCjStock;
-        if (cnOk) return true;
-        if (allowNonCN) {
-          // If non-CN allowed, include items with any CJ stock in other warehouses
-          return (i.anyCjStock || 0) >= minCnCjStock;
-        }
-        return false;
-      });
-      const cnQualified = enriched.filter(i => (i.cnCjStock || 0) >= minCnCjStock).length;
-      const nonCnQualified = enriched.filter(i => (i.anyCjStock || 0) >= minCnCjStock && (i.cnCjStock || 0) < minCnCjStock).length;
-      console.log(`📋 CJ Search returned ${rawItems.length} items; CN-qualified: ${cnQualified} (>= ${minCnCjStock}); non-CN qualified: ${nonCnQualified}; allowNonCN=${allowNonCN}`);
+      const filtered = enriched.filter(i => (i.cnCjStock || 0) > 20);
+      console.log(`📋 CJ Search returned ${rawItems.length} items; ${filtered.length} have CN CJ stock > 20`);
 
       res.json({
         ...result,
         items: filtered,
         total: filtered.length,
         filtered: true,
-        filters: { minCnCjStock, allowNonCN },
-        stats: { raw: rawItems.length, cnQualified, nonCnQualified },
       });
     }
   } catch (error) {
