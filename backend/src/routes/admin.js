@@ -770,6 +770,7 @@ router.get('/cj-products/search', async (req, res) => {
 
         // Try to fetch CN stock for the first variant
         let cnFactoryStock = 0;
+        let inventoryChecked = false;
         try {
           // Ensure we have a variant VID: if not present, fetch details
           let vid = item.vid;
@@ -781,25 +782,31 @@ router.get('/cj-products/search', async (req, res) => {
             const inv = await cjClient.getInventory(vid);
             const cnWarehouses = (inv || []).filter(w => w.countryCode === 'CN');
             cnFactoryStock = cnWarehouses.reduce((sum, w) => sum + (Number(w.factoryInventory) || 0), 0);
+            inventoryChecked = true;
           }
         } catch (e) {
           console.warn(`⚠️ Failed to fetch CN CJ stock for pid ${item.pid}:`, e.message);
         }
 
         normalized.cnFactoryStock = cnFactoryStock;
+        normalized.inventoryChecked = inventoryChecked;
         enriched.push(normalized);
       }
 
       // Filter: exclude all non-CN-only items; allow if CN factory > 0
       const filtered = enriched.filter(i => {
         const cnFactory = Number(i.cnFactoryStock || 0);
-        return cnFactory > 0;
+        // Include when inventory lookup failed/missing VID but origin is CN
+        if (cnFactory > 0) return true;
+        if (!i.inventoryChecked && (i.originCountry === 'CN')) return true;
+        return false;
       });
       const stats = {
         raw: rawItems.length,
         cnFactoryQualified: enriched.filter(i => (i.cnFactoryStock || 0) > 0).length,
+        cnOriginIncludedWithoutInventory: enriched.filter(i => !i.inventoryChecked && i.originCountry === 'CN').length,
       };
-      console.log(`📋 CJ Search returned ${stats.raw} items; CN factory qualified: ${stats.cnFactoryQualified}; included: ${filtered.length}`);
+      console.log(`📋 CJ Search returned ${stats.raw} items; CN factory qualified: ${stats.cnFactoryQualified}; CN-origin included without inventory: ${stats.cnOriginIncludedWithoutInventory}; included: ${filtered.length}`);
 
       res.json({
         ...result,
