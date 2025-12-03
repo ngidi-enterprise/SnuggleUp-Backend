@@ -759,28 +759,48 @@ router.get('/cj-products/search', async (req, res) => {
         pageNum: pageNum ? Number(pageNum) : 1,
         pageSize: pageSize ? Number(pageSize) : 20,
       });
-      // Normalize field names for frontend consistency. We already request CN upstream,
-      // so default originCountry to 'CN' when CJ omits it.
-      const normalizedItems = (result.items || []).map(item => {
-        // Derive origin country from available fields
+      // Normalize and enrich with CN CJ stock; filter to cnCjStock > 20
+      const rawItems = result.items || [];
+      const enriched = [];
+      for (const item of rawItems) {
         const origin = item.originCountry || item.fromCountryCode || item.countryCode || item.sourceCountryCode || null;
-        return {
+        const normalized = {
           ...item,
           category: item.categoryName || item.category || 'Baby/Kids',
-          originCountry: origin, // may be null (UNKNOWN) - will be shown in UI
-          suggestedRetailZAR: Math.round((Number(item.price) * USD_TO_ZAR * PRICE_MARKUP) * 100) / 100
+          originCountry: origin,
+          suggestedRetailZAR: Math.round((Number(item.price) * USD_TO_ZAR * PRICE_MARKUP) * 100) / 100,
         };
-      });
-      // TEMPORARILY DISABLED CN filter to debug - CJ API not returning origin country field
-      // .filter(i => i.originCountry === 'CN');
-      
-      console.log(`📋 CJ Search returned ${normalizedItems.length} items, origin countries:`, 
-        normalizedItems.slice(0, 5).map(i => ({ pid: i.pid, origin: i.originCountry })));
-      
+
+        // Try to fetch CN CJ stock for the first variant
+        let cnCjStock = 0;
+        try {
+          // Ensure we have a variant VID: if not present, fetch details
+          let vid = item.vid;
+          if (!vid && item.pid) {
+            const details = await cjClient.getProductDetails(item.pid);
+            vid = details?.variants?.[0]?.vid || null;
+          }
+          if (vid) {
+            const inv = await cjClient.getInventory(vid);
+            const cnWarehouses = (inv || []).filter(w => w.countryCode === 'CN');
+            cnCjStock = cnWarehouses.reduce((sum, w) => sum + (Number(w.cjInventory) || 0), 0);
+          }
+        } catch (e) {
+          console.warn(`⚠️ Failed to fetch CN CJ stock for pid ${item.pid}:`, e.message);
+        }
+
+        normalized.cnCjStock = cnCjStock;
+        enriched.push(normalized);
+      }
+
+      const filtered = enriched.filter(i => (i.cnCjStock || 0) > 20);
+      console.log(`📋 CJ Search returned ${rawItems.length} items; ${filtered.length} have CN CJ stock > 20`);
+
       res.json({
         ...result,
-        items: normalizedItems,
-        total: normalizedItems.length
+        items: filtered,
+        total: filtered.length,
+        filtered: true,
       });
     }
   } catch (error) {
