@@ -286,35 +286,35 @@ router.post('/products', async (req, res) => {
       try {
         const inventory = await cjClient.getInventory(resolvedVid);
         
-        // CRITICAL: Check if product has inventory in China (CN) warehouse
-        // CJ's shipping API only has reliable pricing for CN → worldwide routes
+        // Calculate CJ warehouse stock in China (CN) only - ignore factory stock
         const cnWarehouses = inventory.filter(w => w.countryCode === 'CN');
         const nonCnWarehouses = inventory.filter(w => w.countryCode !== 'CN');
-        const cnStock = cnWarehouses.reduce((sum, w) => sum + (Number(w.cjInventory) || 0), 0);
+        const cnCjStock = cnWarehouses.reduce((sum, w) => sum + (Number(w.cjInventory) || 0), 0);
         const totalStock = inventory.reduce((sum, w) => sum + (Number(w.totalInventory) || 0), 0);
         
         console.log(`🌍 Warehouse analysis for ${cj_pid}:`);
-        console.log(`   CN warehouses: ${cnWarehouses.length} (${cnStock} units available)`);
-        console.log(`   Non-CN warehouses: ${nonCnWarehouses.map(w => w.countryCode).join(', ')}`);
+        console.log(`   CN CJ warehouse stock: ${cnCjStock} units`);
+        console.log(`   Non-CN warehouses: ${nonCnWarehouses.map(w => w.countryCode).join(', ') || 'none'}`);
         
-        // Warn if product has NO China warehouse inventory
-        if (cnStock === 0 && nonCnWarehouses.length > 0) {
-          const countries = [...new Set(nonCnWarehouses.map(w => w.countryCode))].join(', ');
-          console.warn(`⚠️ WARNING: Product ${cj_pid} only ships from non-CN warehouses (${countries})`);
-          console.warn(`   CJ's shipping API often returns R0 pricing for non-CN origins`);
+        // CRITICAL: Only allow products with sufficient CJ warehouse stock in China
+        // Factory stock is ignored - only CJ warehouse stock counts
+        if (cnCjStock <= 20) {
+          console.warn(`⚠️ WARNING: Product ${cj_pid} has insufficient CJ warehouse stock in China (${cnCjStock} ≤ 20)`);
           return res.status(400).json({ 
-            error: 'Product not suitable for South Africa market',
-            reason: `This product only ships from ${countries} warehouses. CJ does not provide shipping quotes for ${countries} → ZA routes.`,
-            suggestion: 'Please select products that ship from China (CN) warehouses for reliable pricing.',
+            error: 'Product not suitable - insufficient CJ warehouse stock',
+            reason: `This product has only ${cnCjStock} units in CJ warehouses in China. Minimum required: 21 units.`,
+            suggestion: 'Please select products with more than 20 units in CJ warehouses (China) for reliable availability.',
             warehouseDetails: {
-              cnStock,
-              nonCnWarehouses: nonCnWarehouses.map(w => ({ country: w.countryCode, stock: w.cjInventory }))
+              cnCjStock,
+              threshold: 20,
+              nonCnWarehouses: nonCnWarehouses.map(w => ({ country: w.countryCode, cjStock: w.cjInventory }))
             }
           });
         }
         
+        console.log(`✅ Product ${cj_pid} approved: ${cnCjStock} units in CN CJ warehouses (> 20)`);
         stockQuantity = totalStock;
-        console.log(`📦 Fetched initial stock for ${cj_pid}: ${stockQuantity} (${cnStock} from CN)`);
+        console.log(`📦 Fetched initial stock for ${cj_pid}: ${stockQuantity}`);
         
         // Insert product first to get the ID
         const result = await pool.query(`
@@ -749,27 +749,23 @@ router.get('/cj-products/search', async (req, res) => {
         pageNum: pageNum ? Number(pageNum) : 1,
         pageSize: pageSize ? Number(pageSize) : 20,
       });
-      
-      // Normalize and FILTER for CN warehouse availability
+      // Normalize field names for frontend consistency. We already request CN upstream,
+      // so default originCountry to 'CN' when CJ omits it.
       const normalizedItems = (result.items || []).map(item => {
-        const origin = item.originCountry || item.fromCountryCode || item.countryCode || item.sourceCountryCode || 'CN';
+        // Derive origin country from available fields
+        const origin = item.originCountry || item.fromCountryCode || item.countryCode || item.sourceCountryCode || null;
         return {
           ...item,
           category: item.categoryName || item.category || 'Baby/Kids',
-          originCountry: origin,
+          originCountry: origin, // may be null (UNKNOWN) - will be shown in UI
           suggestedRetailZAR: Math.round((Number(item.price) * USD_TO_ZAR * PRICE_MARKUP) * 100) / 100
         };
-      }).filter(i => {
-        // Only show products from CN (China) warehouses
-        // CJ API should return CN products due to fromCountryCode param, but double-check here
-        const isFromCN = !i.originCountry || i.originCountry === 'CN';
-        if (!isFromCN) {
-          console.log(`🚫 Filtered out non-CN product: ${i.pid} (origin: ${i.originCountry})`);
-        }
-        return isFromCN;
       });
+      // TEMPORARILY DISABLED CN filter to debug - CJ API not returning origin country field
+      // .filter(i => i.originCountry === 'CN');
       
-      console.log(`📋 CJ Search returned ${result.items?.length || 0} items, filtered to ${normalizedItems.length} CN products`);
+      console.log(`📋 CJ Search returned ${normalizedItems.length} items, origin countries:`, 
+        normalizedItems.slice(0, 5).map(i => ({ pid: i.pid, origin: i.originCountry })));
       
       res.json({
         ...result,
