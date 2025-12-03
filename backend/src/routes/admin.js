@@ -299,40 +299,27 @@ router.post('/products', async (req, res) => {
         // Calculate CJ warehouse stock in China (CN) only - ignore factory stock
         const cnWarehouses = inventory.filter(w => w.countryCode === 'CN');
         const nonCnWarehouses = inventory.filter(w => w.countryCode !== 'CN');
-        const cnCjStock = cnWarehouses.reduce((sum, w) => sum + (Number(w.cjInventory) || 0), 0);
         const cnFactoryStock = cnWarehouses.reduce((sum, w) => sum + (Number(w.factoryInventory) || 0), 0);
         const totalStock = inventory.reduce((sum, w) => sum + (Number(w.totalInventory) || 0), 0);
         
         console.log(`🌍 Warehouse analysis for ${cj_pid}:`);
-        console.log(`   CN CJ warehouse stock: ${cnCjStock} units`);
+        console.log(`   CN factory stock: ${cnFactoryStock} units`);
         console.log(`   Non-CN warehouses: ${nonCnWarehouses.map(w => w.countryCode).join(', ') || 'none'}`);
         
-        // Updated rule: allow if product has CN CJ stock > 20 OR any CN factory inventory > 0
-        // Still exclude products that have no CN presence
-        const hasCnPresence = (cnCjStock > 0) || (cnFactoryStock > 0);
-        const meetsCjThreshold = cnCjStock > 20;
+        // Rule: allow if product has any CN factory inventory (> 0). Exclude non-CN only.
+        const hasCnPresence = cnFactoryStock > 0;
         if (!hasCnPresence) {
           console.warn(`⚠️ WARNING: Product ${cj_pid} rejected: no CN warehouse/factory stock`);
           return res.status(400).json({
             error: 'Product not suitable - no China warehouse or factory stock',
             reason: 'This product has no stock in China. Non-China warehouses are currently not supported for shipping.',
             warehouseDetails: {
-              cnCjStock,
               cnFactoryStock,
               nonCnWarehouses: nonCnWarehouses.map(w => ({ country: w.countryCode, cjStock: w.cjInventory }))
             }
           });
         }
-        if (!meetsCjThreshold && cnFactoryStock <= 0) {
-          console.warn(`⚠️ WARNING: Product ${cj_pid} rejected: CN CJ stock ≤ 20 and no CN factory stock`);
-          return res.status(400).json({
-            error: 'Product not suitable - insufficient China stock',
-            reason: `CJ CN stock: ${cnCjStock} (requires > 20) and CN factory stock: ${cnFactoryStock} (requires > 0)`,
-            warehouseDetails: { cnCjStock, cnFactoryStock }
-          });
-        }
-
-        console.log(`✅ Product ${cj_pid} approved: CN CJ=${cnCjStock}, CN factory=${cnFactoryStock}`);
+        console.log(`✅ Product ${cj_pid} approved: CN factory=${cnFactoryStock}`);
         stockQuantity = totalStock;
         console.log(`📦 Fetched initial stock for ${cj_pid}: ${stockQuantity}`);
         
@@ -769,7 +756,7 @@ router.get('/cj-products/search', async (req, res) => {
         pageNum: pageNum ? Number(pageNum) : 1,
         pageSize: pageSize ? Number(pageSize) : 20,
       });
-      // Normalize and enrich with CN stock footprint (CJ + factory); filter to CN-only presence
+      // Normalize and enrich with CN factory stock; filter to CN-only presence
       const rawItems = result.items || [];
       const enriched = [];
       for (const item of rawItems) {
@@ -782,7 +769,6 @@ router.get('/cj-products/search', async (req, res) => {
         };
 
         // Try to fetch CN stock for the first variant
-        let cnCjStock = 0;
         let cnFactoryStock = 0;
         try {
           // Ensure we have a variant VID: if not present, fetch details
@@ -794,30 +780,26 @@ router.get('/cj-products/search', async (req, res) => {
           if (vid) {
             const inv = await cjClient.getInventory(vid);
             const cnWarehouses = (inv || []).filter(w => w.countryCode === 'CN');
-            cnCjStock = cnWarehouses.reduce((sum, w) => sum + (Number(w.cjInventory) || 0), 0);
             cnFactoryStock = cnWarehouses.reduce((sum, w) => sum + (Number(w.factoryInventory) || 0), 0);
           }
         } catch (e) {
           console.warn(`⚠️ Failed to fetch CN CJ stock for pid ${item.pid}:`, e.message);
         }
 
-        normalized.cnCjStock = cnCjStock;
         normalized.cnFactoryStock = cnFactoryStock;
         enriched.push(normalized);
       }
 
-      // Filter: exclude all non-CN-only items; allow if CN CJ > 20 OR CN factory > 0
+      // Filter: exclude all non-CN-only items; allow if CN factory > 0
       const filtered = enriched.filter(i => {
-        const cnCj = Number(i.cnCjStock || 0);
         const cnFactory = Number(i.cnFactoryStock || 0);
-        return cnCj > 20 || cnFactory > 0;
+        return cnFactory > 0;
       });
       const stats = {
         raw: rawItems.length,
-        cnCjQualified: enriched.filter(i => (i.cnCjStock || 0) > 20).length,
         cnFactoryQualified: enriched.filter(i => (i.cnFactoryStock || 0) > 0).length,
       };
-      console.log(`📋 CJ Search returned ${stats.raw} items; CN CJ qualified: ${stats.cnCjQualified}; CN factory qualified: ${stats.cnFactoryQualified}; included: ${filtered.length}`);
+      console.log(`📋 CJ Search returned ${stats.raw} items; CN factory qualified: ${stats.cnFactoryQualified}; included: ${filtered.length}`);
 
       res.json({
         ...result,
