@@ -165,7 +165,7 @@ export async function getCuratedInventorySnapshot() {
         productName: r.product_name,
         cj_pid: r.cj_pid,
         cj_vid: r.cj_vid,
-        stock_quantity: r.stock_quantity,
+        stock_quantity: 0, // Will be calculated from CN warehouses
         warehouses: []
       };
     }
@@ -180,6 +180,12 @@ export async function getCuratedInventorySnapshot() {
         updated_at: r.updated_at
       });
     }
+  }
+
+  // Calculate stock_quantity from CN total inventory (CJ + factory) to align with admin panel
+  for (const product of Object.values(grouped)) {
+    const cnWarehouses = product.warehouses.filter(w => w.countryCode === 'CN');
+    product.stock_quantity = cnWarehouses.reduce((sum, w) => sum + (Number(w.totalInventory) || 0), 0);
   }
 
   return Object.values(grouped);
