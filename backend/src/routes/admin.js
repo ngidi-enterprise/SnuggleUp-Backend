@@ -724,18 +724,34 @@ router.get('/cj-products/search', async (req, res) => {
       
       // Filter to China products only (check shippingCountryCodes array)
       if (result?.items) {
+        console.log(`🔍 First item shipping codes:`, result.items[0]?.shippingCountryCodes);
         const cnItems = result.items.filter(item => {
           const codes = item.shippingCountryCodes || [];
-          return codes.includes('CN') || codes.includes('China');
+          const hasCN = codes.includes('CN') || codes.includes('China');
+          if (!hasCN) {
+            console.log(`❌ Non-CN item: ${item.pid}, codes:`, codes);
+          }
+          return hasCN;
         });
         console.log(`🇨🇳 Filtered ${result.items.length} results → ${cnItems.length} China products`);
-        res.json({
-          ...result,
-          items: cnItems,
-          total: cnItems.length,
-          filtered: true,
-          originalTotal: result.total
-        });
+        
+        // If filtering resulted in 0 items but original had items, log warning and return all
+        if (cnItems.length === 0 && result.items.length > 0) {
+          console.warn(`⚠️ CN filter removed all items - returning unfiltered results`);
+          res.json({
+            ...result,
+            filtered: false,
+            filterFailed: true
+          });
+        } else {
+          res.json({
+            ...result,
+            items: cnItems,
+            total: cnItems.length,
+            filtered: true,
+            originalTotal: result.total
+          });
+        }
       } else {
         res.json(result || { items: [], total: 0, pageNum: 1, pageSize: 20 });
       }
