@@ -57,28 +57,26 @@ router.get('/', async (req, res) => {
       }
     }
     
-    // Get CJ stock totals from inventory table and mark as sold out if < 20
+    // Get CN total stock (CJ + factory) from inventory table to match admin panel
     const productIds = Object.keys(productsMap);
     if (productIds.length > 0) {
       const inventoryResult = await pool.query(`
-        SELECT curated_product_id, SUM(cj_inventory) as total_cj_stock
+        SELECT curated_product_id, SUM(total_inventory) as cn_total_stock
         FROM curated_product_inventories
         WHERE curated_product_id = ANY($1::int[])
+          AND country_code = 'CN'
         GROUP BY curated_product_id
       `, [productIds]);
       
       const stockMap = {};
       for (const inv of inventoryResult.rows) {
-        stockMap[inv.curated_product_id] = Number(inv.total_cj_stock) || 0;
+        stockMap[inv.curated_product_id] = Number(inv.cn_total_stock) || 0;
       }
       
-      // Apply stock rules: CJ stock ≤20 means sold out (ignore factory stock)
+      // Override product stock_quantity with CN total (CJ + factory) to align with admin panel
       for (const [id, product] of Object.entries(productsMap)) {
-        const cjStock = stockMap[id] || 0;
-        // If CJ warehouse has ≤20 stock, mark as sold out (low stock threshold)
-        if (cjStock <= 20) {
-          product.stock_quantity = 0; // Mark as sold out
-        }
+        const cnTotalStock = stockMap[id] || 0;
+        product.stock_quantity = cnTotalStock;
       }
     }
     
