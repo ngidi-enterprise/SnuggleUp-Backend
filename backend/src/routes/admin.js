@@ -304,7 +304,9 @@ router.post('/products', async (req, res) => {
 
         if (resolvedVid) {
           const inventory = await cjClient.getInventory(resolvedVid);
-          const totalStock = inventory.reduce((sum, w) => sum + (Number(w.totalInventory) || 0), 0);
+          // Use total inventory (CJ + factory) for CN warehouses
+          const cnWarehouses = inventory.filter(w => w.countryCode === 'CN');
+          const totalStock = cnWarehouses.reduce((sum, w) => sum + (Number(w.totalInventory) || 0), 0);
           await pool.query(`UPDATE curated_products SET stock_quantity = $1, updated_at = NOW() WHERE id = $2`, [totalStock, created.id]);
 
           for (const wh of inventory) {
