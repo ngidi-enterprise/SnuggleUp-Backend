@@ -49,7 +49,7 @@ router.post('/create', optionalAuth, async (req, res) => {
     // Generate unique order number
     const orderNumber = `ORDER-${Date.now()}`;
     
-    // Validate stock availability before payment - require CJ stock >= 20
+    // Validate stock availability before payment - use CN total (CJ + factory) like storefront does
     if (orderItems && orderItems.length > 0) {
       const productIds = orderItems.map(item => {
         const id = String(item.id || '').replace('curated-', '');
@@ -62,18 +62,19 @@ router.post('/create', optionalAuth, async (req, res) => {
           SELECT 
             cp.id,
             cp.product_name,
-            COALESCE(SUM(cpi.cj_inventory), 0) as total_cj_stock
+            COALESCE(SUM(cpi.total_inventory), 0) as cn_total_stock
           FROM curated_products cp
           LEFT JOIN curated_product_inventories cpi ON cp.id = cpi.curated_product_id
           WHERE cp.id = ANY($1::int[])
+            AND cpi.country_code = 'CN'
           GROUP BY cp.id, cp.product_name
         `, [productIds]);
         
         const soldOutItems = [];
         for (const row of stockResult.rows) {
-          const cjStock = Number(row.total_cj_stock) || 0;
-          // Products with CJ stock ≤20 are sold out (low stock threshold)
-          if (cjStock <= 20) {
+          const cnTotalStock = Number(row.cn_total_stock) || 0;
+          // Products with CN total stock = 0 are sold out (matches storefront logic)
+          if (cnTotalStock === 0) {
             soldOutItems.push(row.product_name);
           }
         }
@@ -82,7 +83,7 @@ router.post('/create', optionalAuth, async (req, res) => {
           return res.status(400).json({
             error: 'Cannot complete payment - some items are sold out',
             soldOutItems,
-            message: `The following items are currently sold out (not available at supplier warehouse) and cannot be purchased: ${soldOutItems.join(', ')}. Please remove them from your cart.`
+            message: `The following items are currently sold out and cannot be purchased: ${soldOutItems.join(', ')}. Please remove them from your cart.`
           });
         }
       }
