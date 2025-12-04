@@ -61,21 +61,19 @@ export async function syncCuratedInventory({ limit, syncType = 'scheduled' } = {
         // Fetch inventory per variant
         const inventory = await cjClient.getInventory(cj_vid);
         
-        // Calculate CJ warehouse stock only (ready to ship) - IGNORE factory stock
-        const cjStock = inventory.reduce((sum, w) => sum + (Number(w.cjInventory) || 0), 0);
+        // Calculate CN total inventory (CJ + factory) to match admin panel & storefront
+        const cnWarehouses = inventory.filter(w => w.countryCode === 'CN');
+        const cnTotalStock = cnWarehouses.reduce((sum, w) => sum + (Number(w.totalInventory) || 0), 0);
         
         // CRITICAL: Keep products active even if out of stock - they still show on storefront with "OUT OF STOCK" badge
         // Only deactivate if explicitly set by admin or product has other issues
         const shouldBeActive = true; // Always keep active to show out of stock items
         
-        // Store stock_quantity based on threshold:
-        // - If CJ stock ≤ 20: set stock_quantity = 0 (shows "OUT OF STOCK" badge)
-        // - If CJ stock > 20: set stock_quantity = actual CJ stock
-        const stockQuantity = cjStock <= 20 ? 0 : cjStock;
-        
+        // Store stock_quantity as CN total inventory (CJ + factory combined)
+        // This aligns with admin inventory panel and public products endpoint
         await pool.query(
           'UPDATE curated_products SET stock_quantity = $1, is_active = $2, updated_at = NOW() WHERE id = $3',
-          [stockQuantity, shouldBeActive, id]
+          [cnTotalStock, shouldBeActive, id]
         );
 
         // Upsert warehouse rows; simplest strategy: delete old rows then insert
@@ -99,7 +97,7 @@ export async function syncCuratedInventory({ limit, syncType = 'scheduled' } = {
           );
         }
 
-        updated.push({ id, cj_pid, cj_vid, cjStock, warehouses: inventory.length });
+        updated.push({ id, cj_pid, cj_vid, cnTotalStock, warehouses: inventory.length });
         details.push({ id, cj_pid, cj_vid, inventory });
       } catch (err) {
         console.error('Inventory sync error for product', id, cj_pid, err.message);
