@@ -227,6 +227,16 @@ router.get('/:id', async (req, res) => {
 
     const product = result.rows[0];
     
+    // Calculate CN total stock (CJ + factory) to match storefront and admin panel
+    const inventoryResult = await pool.query(`
+      SELECT SUM(total_inventory) as cn_total_stock
+      FROM curated_product_inventories
+      WHERE curated_product_id = $1 AND country_code = 'CN'
+    `, [numericId]);
+    
+    const cnTotalStock = Number(inventoryResult.rows[0]?.cn_total_stock) || 0;
+    product.stock_quantity = cnTotalStock;
+    
     // Fetch all variants: prefer shared group_code, else cj_pid
     let variants = [];
     if (product.group_code) {
@@ -251,6 +261,7 @@ router.get('/:id', async (req, res) => {
       cj_pid: product.cj_pid,
       cj_vid: product.cj_vid,
       has_cj_vid: !!product.cj_vid,
+      stock_quantity: product.stock_quantity,
       variantCount: variants.length,
       group_code: product.group_code || null
     });
