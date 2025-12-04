@@ -722,11 +722,12 @@ router.get('/cj-products/search', async (req, res) => {
         pageSize: pageSize ? Number(pageSize) : 20,
       });
       
-      // Filter out non-CN products
+      // Filter to China products only (check shippingCountryCodes array)
       if (result?.items) {
-        const cnItems = result.items.filter(item => 
-          item.originCountry === 'CN' || item.originCountry === 'China'
-        );
+        const cnItems = result.items.filter(item => {
+          const codes = item.shippingCountryCodes || [];
+          return codes.includes('CN') || codes.includes('China');
+        });
         console.log(`🇨🇳 Filtered ${result.items.length} results → ${cnItems.length} China products`);
         res.json({
           ...result,
