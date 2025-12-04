@@ -1114,6 +1114,7 @@ router.post('/products/fix-missing-vids', async (req, res) => {
 
     const fixed = [];
     const failed = [];
+    let rateLimitHit = false;
 
     for (const product of result.rows) {
       try {
@@ -1141,22 +1142,70 @@ router.post('/products/fix-missing-vids', async (req, res) => {
           continue;
         }
 
-        // Update product with cj_vid
+        // Update product with cj_vid and fetch inventory to update stock
         await pool.query(`
           UPDATE curated_products 
           SET cj_vid = $1, updated_at = NOW() 
           WHERE id = $2
         `, [defaultVariant.vid, product.id]);
 
-        fixed.push({ 
-          id: product.id, 
-          name: product.product_name, 
-          cj_vid: defaultVariant.vid 
-        });
+        // Try to fetch inventory and update stock (CN warehouses only)
+        try {
+          const inventory = await cjClient.getInventory(defaultVariant.vid);
+          const cnWarehouses = inventory.filter(w => w.countryCode === 'CN');
+          const totalStock = cnWarehouses.reduce((sum, w) => sum + (Number(w.totalInventory) || 0), 0);
+          
+          await pool.query(`
+            UPDATE curated_products 
+            SET stock_quantity = $1, updated_at = NOW() 
+            WHERE id = $2
+          `, [totalStock, product.id]);
 
-        console.log(`[admin] ✓ Fixed product ${product.id}: ${product.product_name} -> cj_vid: ${defaultVariant.vid}`);
+          // Update inventory table
+          await pool.query(`DELETE FROM curated_product_inventories WHERE curated_product_id = $1`, [product.id]);
+          for (const wh of inventory) {
+            await pool.query(`
+              INSERT INTO curated_product_inventories 
+              (curated_product_id, cj_pid, cj_vid, warehouse_id, warehouse_name, country_code, total_inventory, cj_inventory, factory_inventory, updated_at)
+              VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, NOW())
+            `, [
+              product.id,
+              product.cj_pid,
+              defaultVariant.vid,
+              wh.warehouseId,
+              wh.warehouseName,
+              wh.countryCode,
+              wh.totalInventory,
+              wh.cjInventory,
+              wh.factoryInventory
+            ]);
+          }
+
+          fixed.push({ 
+            id: product.id, 
+            name: product.product_name, 
+            cj_vid: defaultVariant.vid,
+            stock: totalStock
+          });
+
+          console.log(`[admin] ✓ Fixed product ${product.id}: ${product.product_name} -> cj_vid: ${defaultVariant.vid}, stock: ${totalStock}`);
+        } catch (invError) {
+          // If inventory fetch fails, still mark VID as fixed
+          fixed.push({ 
+            id: product.id, 
+            name: product.product_name, 
+            cj_vid: defaultVariant.vid,
+            stock: 'inventory_fetch_failed',
+            inventoryError: invError.message
+          });
+          console.warn(`[admin] ⚠️ Fixed VID for product ${product.id} but inventory fetch failed:`, invError.message);
+        }
 
       } catch (error) {
+        // Check if it's a rate limit error
+        if (error.message && (error.message.includes('429') || error.message.includes('rate limit'))) {
+          rateLimitHit = true;
+        }
         failed.push({ 
           id: product.id, 
           name: product.product_name, 
@@ -1168,14 +1217,21 @@ router.post('/products/fix-missing-vids', async (req, res) => {
 
     res.json({
       success: true,
-      message: `Fixed ${fixed.length} products, ${failed.length} failed`,
+      message: `Fixed ${fixed.length} products, ${failed.length} failed${rateLimitHit ? ' (rate limit hit)' : ''}`,
       fixed,
-      failed
+      failed,
+      rateLimitHit,
+      note: rateLimitHit ? 'CJ API rate limit reached. Wait until 6pm (CJ midnight) for quota reset, then re-run.' : null
     });
 
   } catch (error) {
     console.error('[admin] Fix missing VIDs error:', error);
-    res.status(500).json({ error: 'Failed to fix missing VIDs' });
+    // Ensure we always send valid JSON
+    res.status(500).json({ 
+      success: false,
+      error: 'Failed to fix missing VIDs',
+      details: error.message 
+    });
   }
 });
 
