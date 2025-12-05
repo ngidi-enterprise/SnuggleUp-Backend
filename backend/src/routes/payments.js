@@ -164,13 +164,8 @@ router.post('/create', optionalAuth, async (req, res) => {
       item_description: orderItems?.map(i => i.name).join(', ').substring(0, 100) || 'SnuggleUp order',
     };
 
-    // Add test flag BEFORE signature so it's included in the hash (PayFast requirement)
-    if (testMode) {
-      data.test = '1';
-    }
-
-  // Generate signature according to PayFast specs
-  const signature = generateSignature(data, passphrase);
+    // Generate signature according to PayFast specs (do NOT include test flag in signature)
+    const signature = generateSignature(data, passphrase);
     data.signature = signature;
 
     // In test mode, use sandbox URL
@@ -183,10 +178,9 @@ router.post('/create', optionalAuth, async (req, res) => {
     console.log('✅ PayFast URL generated:', payfastUrl);
     console.log('📝 Payment data (posting):', { ...data, signature: signature.substring(0, 10) + '...' });
     console.log('ℹ️ PayFast debug:', {
-      includeTest: data.test === '1',
+      testMode: testMode,
       passphraseUsed: passphrase.length > 0,
       passphraseLength: passphrase.length,
-      testMode: testMode,
       allDataKeys: Object.keys(data)
     });
 
