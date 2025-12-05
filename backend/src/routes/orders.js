@@ -71,6 +71,14 @@ export const createOrder = async (userId, orderData) => {
       shippingDetails
     } = orderData;
     
+    // Ensure numeric values are actual numbers, not strings
+    const numSubtotal = parseFloat(subtotal) || 0;
+    const numShipping = parseFloat(shipping) || 0;
+    const numDiscount = parseFloat(discount) || 0;
+    const numTotal = parseFloat(total) || 0;
+    const numInsuranceCost = parseFloat(insurance?.cost) || 0;
+    const numInsuranceCoverage = parseFloat(insurance?.coverage) || 0;
+    
     const result = await db.query(
       `INSERT INTO orders (
         user_id, order_number, items, subtotal, shipping, discount, total, customer_email, 
@@ -78,27 +86,28 @@ export const createOrder = async (userId, orderData) => {
         customer_name, shipping_address, shipping_city, shipping_province, shipping_postal_code, shipping_phone,
         status
       )
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, 'pending') RETURNING id`,
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20) RETURNING id`,
       [
         userId,
         orderNumber,
         JSON.stringify(items),
-        subtotal,
-        shipping,
-        discount || 0,
-        total,
+        numSubtotal,
+        numShipping,
+        numDiscount,
+        numTotal,
         email,
         shippingCountry || 'ZA',
         shippingMethod || 'STANDARD',
         insurance?.selected || false,
-        insurance?.cost || 0,
-        insurance?.coverage || 0,
+        numInsuranceCost,
+        numInsuranceCoverage,
         shippingDetails?.customerName || null,
         shippingDetails?.address || null,
         shippingDetails?.city || null,
         shippingDetails?.province || null,
         shippingDetails?.postalCode || null,
-        shippingDetails?.phone || null
+        shippingDetails?.phone || null,
+        'pending'
       ]
     );
     return result.rows[0].id;
