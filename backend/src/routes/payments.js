@@ -403,16 +403,17 @@ function generateSignature(data, passphrase = '') {
     console.log(`  ${key}=${displayValue}`);
   });
 
-  // Build signature string: key=urlEncodedValue with %20 replaced by +
+  // Build signature string: key=value (RAW values, not URL-encoded for signature)
+  // PayFast docs: use raw values for signature, URL-encode only for form submission
   const signatureString = signingKeys
-    .map(key => `${key}=${encodeURIComponent(signatureData[key]).replace(/%20/g, '+')}`)
+    .map(key => `${key}=${signatureData[key]}`)
     .join('&');
 
   // Append passphrase ONLY if it's actually set and non-empty
   let finalString = signatureString;
   const trimmedPassphrase = passphrase ? passphrase.trim() : '';
   if (trimmedPassphrase.length > 0) {
-    finalString = `${signatureString}&passphrase=${encodeURIComponent(trimmedPassphrase).replace(/%20/g, '+')}`;
+    finalString = `${signatureString}&passphrase=${trimmedPassphrase}`;
     console.log(`✓ Passphrase appended to signature string (length: ${trimmedPassphrase.length})`);
   } else {
     console.log('ℹ️ No passphrase - signature string without passphrase');
