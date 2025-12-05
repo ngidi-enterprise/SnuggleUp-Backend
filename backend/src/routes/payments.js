@@ -385,43 +385,43 @@ router.post('/notify', async (req, res) => {
 
 // Helper function to generate PayFast signature according to their specs
 function generateSignature(data, passphrase = '') {
-  // PayFast signature: ONLY specific fields in alphabetical order
-  // Per PayFast docs: signature is generated from the serialized form data
-  // Standard fields for signature: amount, cancel_url, email_address, item_name, 
-  // m_payment_id, merchant_id, merchant_key, name_first, notify_url, return_url
+  // PayFast signature: specific fields in a specific order (as shown in their form)
+  // The order matters! Based on their integration test page, the order is:
+  // merchant_id, merchant_key, return_url, cancel_url, notify_url, name_first,
+  // email_address, m_payment_id, amount, item_name, item_description
   
   const signatureData = { ...data };
   delete signatureData.signature; // Remove signature from data before signing
   
-  // PayFast only signs these specific fields (in alphabetical order)
-  const allowedFields = [
-    'amount',
-    'cancel_url',
-    'email_address',
-    'item_name',
-    'm_payment_id',
+  // Try the exact order shown in PayFast integration test form
+  const fieldOrder = [
     'merchant_id',
     'merchant_key',
-    'name_first',
+    'return_url',
+    'cancel_url',
     'notify_url',
-    'return_url'
+    'name_first',
+    'email_address',
+    'm_payment_id',
+    'amount',
+    'item_name',
+    'item_description'
   ];
   
-  // Filter to ONLY allowed fields that are present and not empty
-  const signingKeys = allowedFields.filter(
+  // Filter to fields that exist and are not empty, in the specified order
+  const signingKeys = fieldOrder.filter(
     k => signatureData[k] !== undefined && 
          signatureData[k] !== null && 
          String(signatureData[k]).length > 0
-  ).sort();
+  );
 
-  console.log('🔍 Fields being signed (alphabetical order - PayFast standard):');
+  console.log('🔍 Fields being signed (PayFast form order):');
   signingKeys.forEach(key => {
     const displayValue = String(signatureData[key]).substring(0, 80) + (String(signatureData[key]).length > 80 ? '...' : '');
     console.log(`  ${key}=${displayValue}`);
   });
 
   // Build signature string: key=value (RAW values, NO URL encoding)
-  // PayFast's "serialized form" might mean raw values in alphabetical key order
   const signatureString = signingKeys
     .map(key => `${key}=${signatureData[key]}`)
     .join('&');
