@@ -166,6 +166,11 @@ router.post('/create', optionalAuth, async (req, res) => {
       item_description: orderItems?.map(i => i.name).join(', ').substring(0, 100) || 'SnuggleUp order',
     };
 
+    // In sandbox mode PayFast expects test=1 to be present (and included in signature)
+    if (testMode) {
+      data.test = 1;
+    }
+
     // Generate signature according to PayFast specs (do NOT include test flag in signature)
     // ⚠️ TEMPORARY SANDBOX WORKAROUND: Hardcoded test signature
     // This is ONLY for testing with PayFast sandbox credentials (10042854 / bmvnyjivavg1a)
@@ -264,6 +269,10 @@ router.post('/test-signature', async (req, res) => {
     
     // Test with PayFast validation endpoint
     const testData = { ...formData, signature };
+    // Ensure test=1 is present in sandbox validation
+    if (testData.merchant_id === '10042854') {
+      testData.test = 1;
+    }
     
     // PayFast validation endpoint expects fields in ALPHABETICAL ORDER for validation
     // This is different from the order used for signature generation!
@@ -463,6 +472,13 @@ function generateSignature(data, passphrase = '') {
     'item_name',
     'item_description'
   ];
+  if (data.test !== undefined) {
+    fieldOrder.push('test');
+  }
+  // Include test flag if present
+  if (data.test !== undefined) {
+    fieldOrder.push('test');
+  }
   
   // Filter to fields that exist and are not empty, in the specified order
   const signingKeys = fieldOrder.filter(
