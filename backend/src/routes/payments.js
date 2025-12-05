@@ -47,14 +47,19 @@ router.post('/create', optionalAuth, async (req, res) => {
     const merchantId = process.env.PAYFAST_MERCHANT_ID;
     const merchantKey = process.env.PAYFAST_MERCHANT_KEY;
     // Important: Only use passphrase if it's actually set and non-empty
+    // Check for undefined, null, empty string, or whitespace-only
     const rawPassphrase = process.env.PAYFAST_PASSPHRASE;
-    const passphrase = (rawPassphrase && rawPassphrase.trim().length > 0) ? rawPassphrase.trim() : '';
+    const passphrase = (rawPassphrase && typeof rawPassphrase === 'string' && rawPassphrase.trim().length > 0) 
+      ? rawPassphrase.trim() 
+      : '';
     
     console.log('⚙️ PayFast Configuration Check:');
     console.log(`  Test Mode: ${testMode ? '✓ SANDBOX' : '✗ LIVE'}`);
     console.log(`  Merchant ID: ${merchantId ? '✓ Set' : '✗ MISSING'}`);
     console.log(`  Merchant Key: ${merchantKey ? '✓ Set' : '✗ MISSING'}`);
-    console.log(`  Passphrase: ${passphrase ? `✓ Set (${passphrase.length} chars)` : '✓ Empty (no passphrase)'}`);
+    console.log(`  Passphrase raw: "${rawPassphrase}" (type: ${typeof rawPassphrase})`);
+    console.log(`  Passphrase trimmed: "${passphrase}" (length: ${passphrase.length})`);
+    console.log(`  Passphrase will be used: ${passphrase.length > 0 ? 'YES' : 'NO'}`);
     
     if (!merchantId || !merchantKey) {
       console.error('❌ PayFast credentials not configured!');
@@ -175,7 +180,8 @@ router.post('/create', optionalAuth, async (req, res) => {
     console.log('📝 Payment data (posting):', { ...data, signature: signature.substring(0, 10) + '...' });
     console.log('ℹ️ PayFast debug:', {
       includeTest: data.test === '1',
-      passphraseIncluded: Boolean(passphrase),
+      passphraseUsed: passphrase.length > 0,
+      passphraseLength: passphrase.length
     });
 
     // Build form inputs - DO NOT HTML-escape values; PayFast expects raw values in form
@@ -233,7 +239,9 @@ router.post('/notify', async (req, res) => {
 
     // 1. Recreate signature locally using same passphrase logic
     const rawPassphrase = process.env.PAYFAST_PASSPHRASE;
-    const passphrase = (rawPassphrase && rawPassphrase.trim().length > 0) ? rawPassphrase.trim() : '';
+    const passphrase = (rawPassphrase && typeof rawPassphrase === 'string' && rawPassphrase.trim().length > 0) 
+      ? rawPassphrase.trim() 
+      : '';
     const localSig = generateSignature(params, passphrase);
     const signaturesMatch = localSig === receivedSignature;
 
