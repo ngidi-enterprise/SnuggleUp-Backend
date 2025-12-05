@@ -265,17 +265,15 @@ router.post('/test-signature', async (req, res) => {
     // Test with PayFast validation endpoint
     const testData = { ...formData, signature };
     
-    // PayFast validation expects form-encoded data
-    // Build form body carefully - PayFast might be picky about encoding
-    const formBodyParts = [];
-    Object.entries(testData).forEach(([k, v]) => {
-      // Use standard form encoding
-      formBodyParts.push(`${encodeURIComponent(k)}=${encodeURIComponent(v)}`);
-    });
-    const formBody = formBodyParts.join('&');
+    // PayFast validation endpoint expects fields in ALPHABETICAL ORDER for validation
+    // This is different from the order used for signature generation!
+    const sortedEntries = Object.entries(testData).sort(([keyA], [keyB]) => keyA.localeCompare(keyB));
+    const formBody = sortedEntries
+      .map(([k, v]) => `${encodeURIComponent(k)}=${encodeURIComponent(v)}`)
+      .join('&');
     
     console.log('📤 Testing with PayFast sandbox validation endpoint');
-    console.log('📊 Full form body:', formBody);
+    console.log('📊 Alphabetically sorted form body:', formBody);
     console.log('📊 Signature in request:', signature);
     
     const vRes = await fetch('https://sandbox.payfast.co.za/eng/query/validate', {
