@@ -385,19 +385,36 @@ router.post('/notify', async (req, res) => {
 
 // Helper function to generate PayFast signature according to their specs
 function generateSignature(data, passphrase = '') {
-  // PayFast signature: key=value&key=value with URL-ENCODED values
-  // Sorted alphabetically, exclude signature and empty/undefined values
-  // Must match EXACTLY what was used to sign
+  // PayFast signature: ONLY specific fields in alphabetical order
+  // Per PayFast docs: signature is generated from the serialized form data
+  // Standard fields for signature: amount, cancel_url, email_address, item_name, 
+  // m_payment_id, merchant_id, merchant_key, name_first, notify_url, return_url
   
   const signatureData = { ...data };
   delete signatureData.signature; // Remove signature from data before signing
   
-  // Get keys, sort alphabetically, filter empty values
-  const signingKeys = Object.keys(signatureData)
-    .filter(k => signatureData[k] !== undefined && signatureData[k] !== null && String(signatureData[k]).length > 0)
-    .sort();
+  // PayFast only signs these specific fields (in alphabetical order)
+  const allowedFields = [
+    'amount',
+    'cancel_url',
+    'email_address',
+    'item_name',
+    'm_payment_id',
+    'merchant_id',
+    'merchant_key',
+    'name_first',
+    'notify_url',
+    'return_url'
+  ];
+  
+  // Filter to ONLY allowed fields that are present and not empty
+  const signingKeys = allowedFields.filter(
+    k => signatureData[k] !== undefined && 
+         signatureData[k] !== null && 
+         String(signatureData[k]).length > 0
+  ).sort();
 
-  console.log('🔍 Fields being signed (alphabetical order):');
+  console.log('🔍 Fields being signed (alphabetical order - PayFast standard):');
   signingKeys.forEach(key => {
     const displayValue = String(signatureData[key]).substring(0, 80) + (String(signatureData[key]).length > 80 ? '...' : '');
     console.log(`  ${key}=${displayValue}`);
