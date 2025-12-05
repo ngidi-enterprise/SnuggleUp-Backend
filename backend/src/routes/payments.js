@@ -210,7 +210,9 @@ router.post('/create', optionalAuth, async (req, res) => {
 </html>`;
 
     // Debug: log full signature string and raw form HTML
-    console.log('🔑 PayFast FULL signature string sent:', signatureString);
+    // The signature string is only available inside generateSignature, so log it there
+    // Here, just log the signature value
+    console.log('🔑 PayFast signature (MD5 hash) sent:', signature);
     console.log('📝 PayFast raw HTML form sent:', html);
 
     res.setHeader('Content-Type', 'text/html; charset=utf-8');
