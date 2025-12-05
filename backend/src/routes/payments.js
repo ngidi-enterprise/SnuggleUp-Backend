@@ -343,41 +343,46 @@ router.post('/notify', async (req, res) => {
 
 // Helper function to generate PayFast signature according to their specs
 function generateSignature(data, passphrase = '') {
-  // PayFast signature: key=value&key=value with URL-ENCODED values (critical!)
+  // PayFast signature: key=value&key=value with URL-ENCODED values
   // Sorted alphabetically, exclude signature and empty/undefined values
-  const entries = Object.entries(data)
-    .filter(([key, value]) => key !== 'signature' && value !== undefined && value !== null && `${value}`.length > 0)
-    .sort(([a], [b]) => a.localeCompare(b));
+  // Must match EXACTLY what was used to sign
+  
+  const signatureData = { ...data };
+  delete signatureData.signature; // Remove signature from data before signing
+  
+  // Get keys, sort alphabetically, filter empty values
+  const signingKeys = Object.keys(signatureData)
+    .filter(k => signatureData[k] !== undefined && signatureData[k] !== null && String(signatureData[k]).length > 0)
+    .sort();
 
   console.log('🔍 Fields being signed (alphabetical order):');
-  entries.forEach(([key, value]) => {
-    const displayValue = String(value).substring(0, 80) + (String(value).length > 80 ? '...' : '');
+  signingKeys.forEach(key => {
+    const displayValue = String(signatureData[key]).substring(0, 80) + (String(signatureData[key]).length > 80 ? '...' : '');
     console.log(`  ${key}=${displayValue}`);
   });
 
-  // URL-encode values and replace %20 with + (PayFast requirement)
-  const params = entries
-    .map(([key, value]) => `${key}=${encodeURIComponent(String(value)).replace(/%20/g, '+')}`)
+  // Build signature string: key=urlEncodedValue with %20 replaced by +
+  const signatureString = signingKeys
+    .map(key => `${key}=${encodeURIComponent(signatureData[key]).replace(/%20/g, '+')}`)
     .join('&');
 
   // Append passphrase ONLY if it's actually set and non-empty
-  // PayFast: If no passphrase is configured, do NOT append it to the signature string
-  let signatureString = params;
+  let finalString = signatureString;
   const trimmedPassphrase = passphrase ? passphrase.trim() : '';
   if (trimmedPassphrase.length > 0) {
-    signatureString = `${params}&passphrase=${encodeURIComponent(trimmedPassphrase).replace(/%20/g, '+')}`;
+    finalString = `${signatureString}&passphrase=${encodeURIComponent(trimmedPassphrase).replace(/%20/g, '+')}`;
     console.log(`✓ Passphrase appended to signature string (length: ${trimmedPassphrase.length})`);
   } else {
     console.log('ℹ️ No passphrase - signature string without passphrase');
   }
 
   console.log('🔐 FULL Signature string:');
-  console.log(signatureString);
-  console.log('🔐 String length:', signatureString.length);
+  console.log(finalString);
+  console.log('🔐 String length:', finalString.length);
 
   const hash = crypto
     .createHash('md5')
-    .update(signatureString)
+    .update(finalString)
     .digest('hex');
 
   console.log('🔐 MD5 hash:', hash);
