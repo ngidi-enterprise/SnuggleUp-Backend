@@ -209,6 +209,10 @@ router.post('/create', optionalAuth, async (req, res) => {
   </body>
 </html>`;
 
+    // Debug: log full signature string and raw form HTML
+    console.log('🔑 PayFast FULL signature string sent:', signatureString);
+    console.log('📝 PayFast raw HTML form sent:', html);
+
     res.setHeader('Content-Type', 'text/html; charset=utf-8');
     res.status(200).send(html);
   } catch (error) {
