@@ -49,9 +49,13 @@ router.post('/create', optionalAuth, async (req, res) => {
     // Important: Only use passphrase if it's actually set and non-empty
     // Check for undefined, null, empty string, or whitespace-only
     const rawPassphrase = process.env.PAYFAST_PASSPHRASE;
-    const passphrase = (rawPassphrase && typeof rawPassphrase === 'string' && rawPassphrase.trim().length > 0) 
-      ? rawPassphrase.trim() 
-      : '';
+    // Debug: allow forcing no passphrase via env for testing
+    const forceNoPassphrase = process.env.PAYFAST_NO_PASSPHRASE === 'true';
+    const passphrase = (forceNoPassphrase) 
+      ? '' 
+      : (rawPassphrase && typeof rawPassphrase === 'string' && rawPassphrase.trim().length > 0) 
+        ? rawPassphrase.trim() 
+        : '';
     
     console.log('⚙️ PayFast Configuration Check:');
     console.log(`  Test Mode: ${testMode ? '✓ SANDBOX' : '✗ LIVE'}`);
@@ -247,9 +251,12 @@ router.post('/notify', async (req, res) => {
 
     // 1. Recreate signature locally using same passphrase logic
     const rawPassphrase = process.env.PAYFAST_PASSPHRASE;
-    const passphrase = (rawPassphrase && typeof rawPassphrase === 'string' && rawPassphrase.trim().length > 0) 
-      ? rawPassphrase.trim() 
-      : '';
+    const forceNoPassphrase = process.env.PAYFAST_NO_PASSPHRASE === 'true';
+    const passphrase = (forceNoPassphrase) 
+      ? '' 
+      : (rawPassphrase && typeof rawPassphrase === 'string' && rawPassphrase.trim().length > 0) 
+        ? rawPassphrase.trim() 
+        : '';
     const localSig = generateSignature(params, passphrase);
     const signaturesMatch = localSig === receivedSignature;
 
@@ -340,7 +347,7 @@ router.post('/notify', async (req, res) => {
 
 // Helper function to generate PayFast signature according to their specs
 function generateSignature(data, passphrase = '') {
-  // PayFast signature: key=value&key=value with RAW unencoded values
+  // PayFast signature: key=value&key=value with URL-ENCODED values (critical!)
   // Sorted alphabetically, exclude signature and empty/undefined values
   const entries = Object.entries(data)
     .filter(([key, value]) => key !== 'signature' && value !== undefined && value !== null && `${value}`.length > 0)
@@ -352,8 +359,9 @@ function generateSignature(data, passphrase = '') {
     console.log(`  ${key}=${displayValue}`);
   });
 
+  // URL-encode values and replace %20 with + (PayFast requirement)
   const params = entries
-    .map(([key, value]) => `${key}=${value}`)
+    .map(([key, value]) => `${key}=${encodeURIComponent(String(value)).replace(/%20/g, '+')}`)
     .join('&');
 
   // Append passphrase ONLY if it's actually set and non-empty
@@ -361,7 +369,7 @@ function generateSignature(data, passphrase = '') {
   let signatureString = params;
   const trimmedPassphrase = passphrase ? passphrase.trim() : '';
   if (trimmedPassphrase.length > 0) {
-    signatureString = `${params}&passphrase=${trimmedPassphrase}`;
+    signatureString = `${params}&passphrase=${encodeURIComponent(trimmedPassphrase).replace(/%20/g, '+')}`;
     console.log(`✓ Passphrase appended to signature string (length: ${trimmedPassphrase.length})`);
   } else {
     console.log('ℹ️ No passphrase - signature string without passphrase');
