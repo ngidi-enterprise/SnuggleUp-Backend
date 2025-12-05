@@ -75,7 +75,9 @@ router.post('/create', optionalAuth, async (req, res) => {
     
     // Get frontend URL from environment or request origin
     const frontendUrl = process.env.FRONTEND_URL || req.headers.origin || 'https://vitejsviteeadmfezy-esxh--5173--1db57326.local-credentialless.webcontainer.io';
-    const backendUrl = process.env.BACKEND_URL || 'https://snuggleup-backend.onrender.com';
+    // For PayFast callbacks, use the actual Render backend URL (not the custom domain)
+    // PayFast needs to reach the backend directly, not through a proxy/CDN
+    const backendUrl = process.env.PAYFAST_BACKEND_URL || process.env.BACKEND_URL || 'https://snuggleup-backend.onrender.com';
     
     // Generate unique order number
     const orderNumber = `ORDER-${Date.now()}`;
