@@ -225,6 +225,48 @@ router.post('/create', optionalAuth, async (req, res) => {
   }
 });
 
+// Debug: Test signature against PayFast validation endpoint
+router.post('/test-signature', async (req, res) => {
+  try {
+    const { formData } = req.body;
+    
+    console.log('🧪 TESTING SIGNATURE AGAINST PAYFAST');
+    console.log('📊 Form data received:', formData);
+    
+    // Generate signature using our method
+    const passphrase = ''; // No passphrase for now
+    const ourSignature = generateSignature(formData, passphrase);
+    
+    console.log('✅ Our generated signature:', ourSignature);
+    
+    // Test with PayFast validation endpoint
+    const testData = { ...formData, signature: ourSignature };
+    const formBody = Object.entries(testData)
+      .map(([k, v]) => `${encodeURIComponent(k)}=${encodeURIComponent(v)}`)
+      .join('&');
+    
+    console.log('📤 Testing with PayFast sandbox validation endpoint');
+    const vRes = await fetch('https://sandbox.payfast.co.za/eng/query/validate', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: formBody
+    });
+    
+    const validationResult = await vRes.text();
+    console.log('📥 PayFast validation response:', validationResult);
+    
+    res.json({
+      success: /VALID/i.test(validationResult),
+      generatedSignature: ourSignature,
+      payfastResponse: validationResult,
+      formDataKeys: Object.keys(formData)
+    });
+  } catch (error) {
+    console.error('❌ Test signature error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
 // Handle PayFast success redirect
 router.get('/success', (req, res) => {
   const frontendUrl = process.env.FRONTEND_URL || 'https://vitejsviteeadmfezy-esxh--5173--cf284e50.local-credentialless.webcontainer.io';
