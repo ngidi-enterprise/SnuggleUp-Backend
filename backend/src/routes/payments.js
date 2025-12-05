@@ -46,13 +46,15 @@ router.post('/create', optionalAuth, async (req, res) => {
     const testMode = process.env.PAYFAST_TEST_MODE === 'true';
     const merchantId = process.env.PAYFAST_MERCHANT_ID;
     const merchantKey = process.env.PAYFAST_MERCHANT_KEY;
-    const passphrase = process.env.PAYFAST_PASSPHRASE || '';
+    // Important: Only use passphrase if it's actually set and non-empty
+    const rawPassphrase = process.env.PAYFAST_PASSPHRASE;
+    const passphrase = (rawPassphrase && rawPassphrase.trim().length > 0) ? rawPassphrase.trim() : '';
     
     console.log('⚙️ PayFast Configuration Check:');
     console.log(`  Test Mode: ${testMode ? '✓ SANDBOX' : '✗ LIVE'}`);
     console.log(`  Merchant ID: ${merchantId ? '✓ Set' : '✗ MISSING'}`);
     console.log(`  Merchant Key: ${merchantKey ? '✓ Set' : '✗ MISSING'}`);
-    console.log(`  Passphrase: ${passphrase ? '✓ Set' : '✓ Empty (OK)'}`);
+    console.log(`  Passphrase: ${passphrase ? `✓ Set (${passphrase.length} chars)` : '✓ Empty (no passphrase)'}`);
     
     if (!merchantId || !merchantKey) {
       console.error('❌ PayFast credentials not configured!');
@@ -229,8 +231,9 @@ router.post('/notify', async (req, res) => {
     const receivedSignature = params.signature;
     delete params.signature; // Exclude from signing
 
-    // 1. Recreate signature locally
-    const passphrase = process.env.PAYFAST_PASSPHRASE || '';
+    // 1. Recreate signature locally using same passphrase logic
+    const rawPassphrase = process.env.PAYFAST_PASSPHRASE;
+    const passphrase = (rawPassphrase && rawPassphrase.trim().length > 0) ? rawPassphrase.trim() : '';
     const localSig = generateSignature(params, passphrase);
     const signaturesMatch = localSig === receivedSignature;
 
@@ -337,13 +340,15 @@ function generateSignature(data, passphrase = '') {
     .map(([key, value]) => `${key}=${value}`)
     .join('&');
 
-  // Append passphrase if present (must be included in signature string)
+  // Append passphrase ONLY if it's actually set and non-empty
+  // PayFast: If no passphrase is configured, do NOT append it to the signature string
   let signatureString = params;
-  if (passphrase && passphrase.length > 0) {
-    signatureString = `${params}&passphrase=${passphrase}`;
-    console.log('✓ Passphrase appended to signature string');
+  const trimmedPassphrase = passphrase ? passphrase.trim() : '';
+  if (trimmedPassphrase.length > 0) {
+    signatureString = `${params}&passphrase=${trimmedPassphrase}`;
+    console.log(`✓ Passphrase appended to signature string (length: ${trimmedPassphrase.length})`);
   } else {
-    console.log('ℹ️ No passphrase used (empty)');
+    console.log('ℹ️ No passphrase - signature string without passphrase');
   }
 
   console.log('🔐 FULL Signature string:');
