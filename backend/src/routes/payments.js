@@ -157,12 +157,13 @@ router.post('/create', optionalAuth, async (req, res) => {
       passphraseIncluded: Boolean(passphrase),
     });
 
-    // Build form inputs with raw values (matching signature calculation)
+    // Build form inputs - DO NOT HTML-escape values; PayFast expects raw values in form
     const formFields = Object.entries(data)
       .filter(([key, value]) => value !== undefined && value !== null && `${value}`.length > 0)
       .map(([key, value]) => {
-        const escapedValue = String(value).replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-        return `<input type="hidden" name="${key}" value="${escapedValue}">`;
+        // Only escape double quotes for the HTML attribute value
+        const quotedValue = String(value).replace(/"/g, '&quot;');
+        return `<input type="hidden" name="${key}" value="${quotedValue}">`;
       })
       .join('\n      ');
 
