@@ -42,6 +42,26 @@ router.post('/create', optionalAuth, async (req, res) => {
       insurance: insurance?.selected ? `R${insurance.cost}` : 'None'
     });
     
+    // Validate PayFast configuration
+    const testMode = process.env.PAYFAST_TEST_MODE === 'true';
+    const merchantId = process.env.PAYFAST_MERCHANT_ID;
+    const merchantKey = process.env.PAYFAST_MERCHANT_KEY;
+    const passphrase = process.env.PAYFAST_PASSPHRASE || '';
+    
+    console.log('⚙️ PayFast Configuration Check:');
+    console.log(`  Test Mode: ${testMode ? '✓ SANDBOX' : '✗ LIVE'}`);
+    console.log(`  Merchant ID: ${merchantId ? '✓ Set' : '✗ MISSING'}`);
+    console.log(`  Merchant Key: ${merchantKey ? '✓ Set' : '✗ MISSING'}`);
+    console.log(`  Passphrase: ${passphrase ? '✓ Set' : '✓ Empty (OK)'}`);
+    
+    if (!merchantId || !merchantKey) {
+      console.error('❌ PayFast credentials not configured!');
+      return res.status(500).json({
+        error: 'Payment gateway not configured',
+        details: 'Missing PAYFAST_MERCHANT_ID or PAYFAST_MERCHANT_KEY'
+      });
+    }
+    
     // Get frontend URL from environment or request origin
     const frontendUrl = process.env.FRONTEND_URL || req.headers.origin || 'https://vitejsviteeadmfezy-esxh--5173--1db57326.local-credentialless.webcontainer.io';
     const backendUrl = process.env.BACKEND_URL || 'https://snuggleup-backend.onrender.com';
@@ -120,8 +140,8 @@ router.post('/create', optionalAuth, async (req, res) => {
     // PayFast payment data - order matters for signature!
     // Use shorter URLs to avoid PayFast URL length/validation issues
     const data = {
-      merchant_id: process.env.PAYFAST_MERCHANT_ID || '10042854',
-      merchant_key: process.env.PAYFAST_MERCHANT_KEY || 'bmvnyjivavg1a',
+      merchant_id: merchantId,
+      merchant_key: merchantKey,
       return_url: `${backendUrl}/api/payments/success`,
       cancel_url: `${backendUrl}/api/payments/cancel`,
       notify_url: `${backendUrl}/api/payments/notify`,
@@ -134,17 +154,16 @@ router.post('/create', optionalAuth, async (req, res) => {
     };
 
     // Add test flag BEFORE signature so it's included in the hash (PayFast requirement)
-    if (process.env.PAYFAST_TEST_MODE === 'true') {
+    if (testMode) {
       data.test = '1';
     }
 
   // Generate signature according to PayFast specs
-  const passphrase = process.env.PAYFAST_PASSPHRASE || ''; // Optional but recommended
   const signature = generateSignature(data, passphrase);
     data.signature = signature;
 
     // In test mode, use sandbox URL
-    const payfastUrl = process.env.PAYFAST_TEST_MODE === 'true' 
+    const payfastUrl = testMode
       ? 'https://sandbox.payfast.co.za/eng/process'
       : 'https://www.payfast.co.za/eng/process';
 
@@ -310,7 +329,8 @@ function generateSignature(data, passphrase = '') {
 
   console.log('🔍 Fields being signed (alphabetical order):');
   entries.forEach(([key, value]) => {
-    console.log(`  ${key}=${String(value).substring(0, 80)}${String(value).length > 80 ? '...' : ''}`);
+    const displayValue = String(value).substring(0, 80) + (String(value).length > 80 ? '...' : '');
+    console.log(`  ${key}=${displayValue}`);
   });
 
   const params = entries
@@ -318,7 +338,13 @@ function generateSignature(data, passphrase = '') {
     .join('&');
 
   // Append passphrase if present (must be included in signature string)
-  const signatureString = passphrase ? `${params}&passphrase=${passphrase}` : params;
+  let signatureString = params;
+  if (passphrase && passphrase.length > 0) {
+    signatureString = `${params}&passphrase=${passphrase}`;
+    console.log('✓ Passphrase appended to signature string');
+  } else {
+    console.log('ℹ️ No passphrase used (empty)');
+  }
 
   console.log('🔐 FULL Signature string:');
   console.log(signatureString);
