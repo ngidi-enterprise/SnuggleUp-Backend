@@ -181,7 +181,9 @@ router.post('/create', optionalAuth, async (req, res) => {
     console.log('ℹ️ PayFast debug:', {
       includeTest: data.test === '1',
       passphraseUsed: passphrase.length > 0,
-      passphraseLength: passphrase.length
+      passphraseLength: passphrase.length,
+      testMode: testMode,
+      allDataKeys: Object.keys(data)
     });
 
     // Build form inputs - DO NOT HTML-escape values; PayFast expects raw values in form
