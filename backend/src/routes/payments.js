@@ -268,22 +268,46 @@ router.post('/test-signature', async (req, res) => {
     // PayFast validation endpoint expects fields in ALPHABETICAL ORDER for validation
     // This is different from the order used for signature generation!
     const sortedEntries = Object.entries(testData).sort(([keyA], [keyB]) => keyA.localeCompare(keyB));
-    const formBody = sortedEntries
+    
+    // Try TWO different formats:
+    // 1. With URL encoding (standard)
+    const formBodyEncoded = sortedEntries
       .map(([k, v]) => `${encodeURIComponent(k)}=${encodeURIComponent(v)}`)
       .join('&');
     
-    console.log('📤 Testing with PayFast sandbox validation endpoint');
-    console.log('📊 Alphabetically sorted form body:', formBody);
-    console.log('📊 Signature in request:', signature);
+    // 2. Without URL encoding (raw values)
+    const formBodyRaw = sortedEntries
+      .map(([k, v]) => `${k}=${v}`)
+      .join('&');
     
-    const vRes = await fetch('https://sandbox.payfast.co.za/eng/query/validate', {
+    console.log('📤 Testing with PayFast sandbox validation endpoint');
+    console.log('📊 Trying with URL encoding first...');
+    console.log('📊 Form body (encoded):', formBodyEncoded);
+    
+    let vRes = await fetch('https://sandbox.payfast.co.za/eng/query/validate', {
       method: 'POST',
       headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-      body: formBody
+      body: formBodyEncoded
     });
     
-    const validationResult = await vRes.text();
-    console.log('📥 PayFast validation response:', validationResult);
+    let validationResult = await vRes.text();
+    console.log('📥 PayFast validation response (encoded):', validationResult);
+    
+    // If first attempt fails, try without encoding
+    if (!/VALID/i.test(validationResult)) {
+      console.log('📊 Trying without URL encoding...');
+      console.log('📊 Form body (raw):', formBodyRaw);
+      
+      vRes = await fetch('https://sandbox.payfast.co.za/eng/query/validate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        body: formBodyRaw
+      });
+      
+      validationResult = await vRes.text();
+      console.log('📥 PayFast validation response (raw):', validationResult);
+    }
+    
     console.log('📥 Response type:', typeof validationResult);
     console.log('📥 Response length:', validationResult.length);
     
