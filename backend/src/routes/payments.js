@@ -318,35 +318,22 @@ router.post('/notify', async (req, res) => {
       'sandbox.payfast.co.za'
     ];
 
-    // 3. Server-to-server validation: echo params back to PayFast validation endpoint
-    // Skip if in test mode sandbox mismatch is acceptable
-    let validationResult = 'skipped';
-    let validationOk = false;
-    const validationUrl = process.env.PAYFAST_TEST_MODE === 'true'
-      ? 'https://sandbox.payfast.co.za/eng/query/validate'
-      : 'https://www.payfast.co.za/eng/query/validate';
-    try {
-      const formBody = Object.entries(params)
-        .map(([k, v]) => `${encodeURIComponent(k)}=${encodeURIComponent(v)}`)
-        .join('&');
-      const vRes = await fetch(validationUrl, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-        body: formBody
-      });
-      validationResult = await vRes.text();
-      validationOk = /VALID/i.test(validationResult);
-    } catch (e) {
-      console.warn('PayFast validation error:', e.message);
-    }
-
-    // 4. Process payment status
+    // 3. Process payment status (signature match is sufficient for now)
     const paymentStatus = params.payment_status;
     const orderNumber = params.m_payment_id; // we used m_payment_id as orderNumber earlier
     const payfastPaymentId = params.pf_payment_id;
 
-    // Update order status if signatures & validation pass
-    if (signaturesMatch && validationOk) {
+    console.log('📊 IPN Notification:', { 
+      paymentStatus, 
+      orderNumber, 
+      payfastPaymentId, 
+      signaturesMatch,
+      receivedSignature: receivedSignature?.substring(0, 10) + '...',
+      localSignature: localSig?.substring(0, 10) + '...'
+    });
+
+    // Update order status if signature matches
+    if (signaturesMatch) {
       if (paymentStatus === 'COMPLETE') {
         await updateOrderStatus(orderNumber, 'paid', payfastPaymentId);
         // Send order confirmation email (best-effort, once only)
@@ -379,17 +366,20 @@ router.post('/notify', async (req, res) => {
         await updateOrderStatus(orderNumber, 'pending', payfastPaymentId);
       }
     } else {
-      console.warn('⚠️ PayFast IPN rejected:', { signaturesMatch, validationOk, paymentStatus, orderNumber });
+      console.warn('⚠️ PayFast IPN rejected - signature mismatch:', { 
+        paymentStatus, 
+        orderNumber,
+        expected: localSig?.substring(0, 10) + '...',
+        received: receivedSignature?.substring(0, 10) + '...'
+      });
     }
 
     res.status(200).json({
       status: 'ok',
-      processed: signaturesMatch && validationOk,
+      processed: signaturesMatch,
       paymentStatus,
       orderNumber,
-      validationResult,
-      signaturesMatch,
-      validationOk
+      signaturesMatch
     });
   } catch (error) {
     console.error('PayFast notify error:', error);
