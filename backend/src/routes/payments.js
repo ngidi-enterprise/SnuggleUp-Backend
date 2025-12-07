@@ -251,80 +251,42 @@ router.post('/test-signature', async (req, res) => {
     console.log('🧪 TESTING SIGNATURE AGAINST PAYFAST');
     console.log('📊 Form data received:', formData);
     
-    // IMPORTANT: For PayFast sandbox test, use EXACTLY the URLs from their integration test
-    // Their hardcoded signature de9a7622fdee153ab230455f59907a02 was generated for specific test URLs
-    // We need to match EXACTLY or generate our own valid signature
+    // Generate signature using our method
+    const passphrase = ''; // No passphrase for sandbox
+    const signature = generateSignature(formData, passphrase);
+    console.log('✅ Our generated signature:', signature);
     
-    // Try hardcoding the known-good signature for their test case
-    let signature;
-    if (formData.merchant_id === '10042854' && formData.merchant_key === 'bmvnyjivavg1a' && formData.amount === '398.00') {
-      signature = 'de9a7622fdee153ab230455f59907a02'; // PayFast's own test signature
-      console.log('✅ Using PayFast test signature for validation');
-    } else {
-      // Generate signature using our method
-      const passphrase = ''; // No passphrase for now
-      signature = generateSignature(formData, passphrase);
-      console.log('✅ Our generated signature:', signature);
-    }
-    
-    // Test with PayFast validation endpoint
+    // Test with PayFast validation endpoint - DO NOT add test=1 here
+    // The signature was already generated with the exact fields from formData
+    // Adding test=1 after would invalidate it
     const testData = { ...formData, signature };
-    // Ensure test=1 is present in sandbox validation
-    if (testData.merchant_id === '10042854') {
-      testData.test = 1;
-    }
     
-    // PayFast validation endpoint expects fields in ALPHABETICAL ORDER for validation
-    // This is different from the order used for signature generation!
+    // PayFast validation endpoint expects fields in ALPHABETICAL ORDER
     const sortedEntries = Object.entries(testData).sort(([keyA], [keyB]) => keyA.localeCompare(keyB));
     
-    // Try TWO different formats:
-    // 1. With URL encoding (standard)
-    const formBodyEncoded = sortedEntries
-      .map(([k, v]) => `${encodeURIComponent(k)}=${encodeURIComponent(v)}`)
-      .join('&');
-    
-    // 2. Without URL encoding (raw values)
-    const formBodyRaw = sortedEntries
+    // Build form body WITHOUT URL encoding (PayFast expects raw values)
+    const formBody = sortedEntries
       .map(([k, v]) => `${k}=${v}`)
       .join('&');
     
-    console.log('📤 Testing with PayFast sandbox validation endpoint');
-    console.log('📊 Trying with URL encoding first...');
-    console.log('📊 Form body (encoded):', formBodyEncoded);
+    console.log('📤 Sending to PayFast validation endpoint');
+    console.log('📊 Form body:', formBody);
     
-    let vRes = await fetch('https://sandbox.payfast.co.za/eng/query/validate', {
+    const vRes = await fetch('https://sandbox.payfast.co.za/eng/query/validate', {
       method: 'POST',
       headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-      body: formBodyEncoded
+      body: formBody
     });
     
-    let validationResult = await vRes.text();
-    console.log('📥 PayFast validation response (encoded):', validationResult);
-    
-    // If first attempt fails, try without encoding
-    if (!/VALID/i.test(validationResult)) {
-      console.log('📊 Trying without URL encoding...');
-      console.log('📊 Form body (raw):', formBodyRaw);
-      
-      vRes = await fetch('https://sandbox.payfast.co.za/eng/query/validate', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-        body: formBodyRaw
-      });
-      
-      validationResult = await vRes.text();
-      console.log('📥 PayFast validation response (raw):', validationResult);
-    }
-    
-    console.log('📥 Response type:', typeof validationResult);
-    console.log('📥 Response length:', validationResult.length);
+    const validationResult = await vRes.text();
+    console.log('📥 PayFast validation response:', validationResult);
     
     res.json({
       success: /VALID/i.test(validationResult),
       generatedSignature: signature,
       payfastResponse: validationResult,
-      formDataKeys: Object.keys(formData)
+      formDataKeys: Object.keys(formData),
+      sentToPayFast: formBody
     });
   } catch (error) {
     console.error('❌ Test signature error:', error);
