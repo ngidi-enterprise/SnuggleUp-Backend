@@ -171,21 +171,8 @@ router.post('/create', optionalAuth, async (req, res) => {
       data.test = 1;
     }
 
-    // Generate signature according to PayFast specs (do NOT include test flag in signature)
-    // ⚠️ TEMPORARY SANDBOX WORKAROUND: Hardcoded test signature
-    // This is ONLY for testing with PayFast sandbox credentials (10042854 / bmvnyjivavg1a)
-    // MUST implement real signature generation before PRODUCTION
-    // TODO: Fix signature algorithm - currently mismatches PayFast validation
-    // See: https://github.com/[repo]/issues/[number] for signature reverse-engineering
-    let signature;
-    if (testMode && merchantId === '10042854' && merchantKey === 'bmvnyjivavg1a') {
-      // PayFast sandbox test credentials - use their known good signature
-      signature = 'de9a7622fdee153ab230455f59907a02'; // Known good signature from PayFast integration test
-      console.log('⚠️ SANDBOX TEST MODE: Using hardcoded PayFast test signature (TEMPORARY)');
-    } else {
-      // Production or other test accounts - generate signature normally
-      signature = generateSignature(data, passphrase);
-    }
+    // Generate signature according to PayFast specs
+    const signature = generateSignature(data, passphrase);
     data.signature = signature;
 
     // In test mode, use sandbox URL
@@ -434,10 +421,7 @@ function generateSignature(data, passphrase = '') {
     'item_name',
     'item_description'
   ];
-  if (data.test !== undefined) {
-    fieldOrder.push('test');
-  }
-  // Include test flag if present
+  // Include test flag if present (for sandbox mode)
   if (data.test !== undefined) {
     fieldOrder.push('test');
   }
