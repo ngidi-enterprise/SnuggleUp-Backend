@@ -442,11 +442,10 @@ function generateSignature(data, passphrase = '') {
     fieldOrder.push('test');
   }
   
-  // Filter to fields that exist and are not empty, in the specified order
+  // Filter to fields that exist (PayFast includes empty strings in signature)
   const signingKeys = fieldOrder.filter(
     k => signatureData[k] !== undefined && 
-         signatureData[k] !== null && 
-         String(signatureData[k]).length > 0
+         signatureData[k] !== null
   );
 
   console.log('🔍 Fields being signed (PayFast form order):');
