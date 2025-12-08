@@ -1302,3 +1302,101 @@ router.post('/orders/create-test', requireAdmin, async (req, res) => {
   }
 });
 
+// Sync all product prices with current CJ prices
+// POST /api/admin/products/sync-cj-prices
+router.post('/products/sync-cj-prices', async (req, res) => {
+  try {
+    const { limit = 50 } = req.body;
+
+    // Get active products with CJ PIDs
+    const result = await pool.query(`
+      SELECT id, cj_pid, product_name, cj_cost_price, custom_price 
+      FROM curated_products 
+      WHERE cj_pid IS NOT NULL AND is_active = TRUE
+      ORDER BY updated_at ASC
+      LIMIT $1
+    `, [limit]);
+
+    if (result.rows.length === 0) {
+      return res.json({ 
+        success: true, 
+        message: 'No products to sync',
+        synced: 0,
+        priceChanges: []
+      });
+    }
+
+    console.log(`[admin] Syncing prices for ${result.rows.length} products from CJ...`);
+
+    const priceChanges = [];
+    const errors = [];
+    let syncedCount = 0;
+
+    for (const product of result.rows) {
+      try {
+        // Fetch current CJ price
+        const cjProduct = await cjClient.getProductDetails(product.cj_pid);
+        const currentCJPrice = parseFloat(cjProduct.price || 0);
+
+        if (currentCJPrice <= 0) {
+          errors.push({ id: product.id, name: product.product_name, reason: 'Invalid CJ price' });
+          continue;
+        }
+
+        const storedCJPrice = parseFloat(product.cj_cost_price || 0);
+        const priceDiff = Math.abs(currentCJPrice - storedCJPrice);
+        const percentChange = storedCJPrice > 0 ? (priceDiff / storedCJPrice) * 100 : 0;
+
+        // Always update if price is different (even by 0.01%)
+        if (currentCJPrice !== storedCJPrice) {
+          await loadPricingConfig(); // Ensure latest markup config
+          const costZAR = Math.round(currentCJPrice * USD_TO_ZAR * 100) / 100;
+          const newRetailPrice = Math.round(costZAR * PRICE_MARKUP * 100) / 100;
+
+          await pool.query(`
+            UPDATE curated_products 
+            SET cj_cost_price = $1, 
+                suggested_price = $2,
+                custom_price = $3,
+                updated_at = NOW()
+            WHERE id = $4
+          `, [currentCJPrice, newRetailPrice, newRetailPrice, product.id]);
+
+          if (percentChange > 0.5) { // Only log significant changes (>0.5%)
+            priceChanges.push({
+              id: product.id,
+              name: product.product_name,
+              oldCostUSD: storedCJPrice,
+              newCostUSD: currentCJPrice,
+              oldPriceZAR: product.custom_price,
+              newPriceZAR: newRetailPrice,
+              percentChange: Math.round(percentChange * 10) / 10,
+              increased: currentCJPrice > storedCJPrice
+            });
+          }
+
+          syncedCount++;
+        }
+      } catch (err) {
+        errors.push({ id: product.id, name: product.product_name, reason: err.message });
+        console.error(`[admin] Price sync failed for ${product.cj_pid}:`, err.message);
+      }
+    }
+
+    res.json({
+      success: true,
+      message: `Synced ${syncedCount} products, ${priceChanges.length} prices changed significantly`,
+      synced: syncedCount,
+      priceChanges,
+      errors: errors.length > 0 ? errors : undefined
+    });
+  } catch (error) {
+    console.error('[admin] Sync CJ prices error:', error);
+    res.status(500).json({ 
+      success: false,
+      error: 'Failed to sync CJ prices',
+      details: error.message 
+    });
+  }
+});
+
