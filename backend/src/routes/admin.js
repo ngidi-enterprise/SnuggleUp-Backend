@@ -5,6 +5,7 @@ import { cjClient } from '../services/cjClient.js';
 import { getRuntimeConfig, setShippingFallbackEnabled, isShippingFallbackEnabled } from '../services/configService.js';
 import { generateSEOTitles } from '../services/seoTitleGenerator.js';
 import { getOrderById, buildCJOrderData, updateOrderCJInfo } from './orders.js';
+import { getSchedulerHealth, generateSchedulerReport, getExecutionHistory } from '../services/schedulerMonitor.js';
 
 export const router = express.Router();
 
@@ -76,6 +77,28 @@ router.get('/debug', (req, res) => {
     localUserId: req.localUserId || null,
     supabaseUser: !!req.user?.supabaseUser,
   });
+});
+
+// Scheduler health status (JSON for frontend integration)
+router.get('/scheduler-health', (req, res) => {
+  res.json(getSchedulerHealth());
+});
+
+// Scheduler execution history (for charts)
+router.get('/scheduler-history', (req, res) => {
+  const { type = 'inventory', limit = 50 } = req.query;
+  if (!['inventory', 'price'].includes(type)) {
+    return res.status(400).json({ error: 'type must be "inventory" or "price"' });
+  }
+  res.json(getExecutionHistory(type, Number(limit)));
+});
+
+// Scheduler text report (downloadable)
+router.get('/scheduler-report', (req, res) => {
+  const report = generateSchedulerReport();
+  res.setHeader('Content-Type', 'text/plain; charset=utf-8');
+  res.setHeader('Content-Disposition', 'attachment; filename="scheduler-report.txt"');
+  res.send(report);
 });
 
 // Pricing config introspection (helps debug env issues in deployment)
