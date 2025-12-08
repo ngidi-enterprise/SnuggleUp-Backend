@@ -13,6 +13,7 @@ import { router as shippingRouter } from './routes/shipping.js';
 import { cjClient } from './services/cjClient.js';
 import { syncCuratedInventory } from './services/inventorySync.js';
 import { syncProductPrices } from './services/priceSync.js';
+import { recordInventorySyncExecution, recordPriceSyncExecution } from './services/schedulerMonitor.js';
 import db from './db.js';
 
 // Load environment variables
@@ -144,8 +145,12 @@ app.listen(port, () => {
         const started = Date.now();
         const result = await syncCuratedInventory({ limit, syncType: 'scheduled' });
         const elapsed = Date.now() - started;
+        result.durationMs = elapsed;
+        recordInventorySyncExecution(result);
         console.log(`🗃️  CJ inventory sync completed: updated=${result.updated} failures=${result.failures} processed=${result.processed} in ${elapsed}ms`);
       } catch (e) {
+        const error = { durationMs: 0, error: e.message, failures: -1, processed: 0, updated: 0 };
+        recordInventorySyncExecution(error);
         console.error('❌ CJ inventory scheduled sync failed:', e.message);
       } finally {
         inventorySyncRunning = false;
@@ -239,9 +244,15 @@ app.listen(port, () => {
       priceSyncRunning = true;
       try {
         const limit = Number(process.env.CJ_PRICE_SYNC_BATCH_LIMIT || 200); // Changed from 50 to 200
+        const started = Date.now();
         const result = await syncProductPrices({ limit, syncType: 'scheduled' });
-        console.log(`💰 Price sync completed: synced=${result.synced} significant_changes=${result.priceChanges.length} errors=${result.errors.length}`);
+        const elapsed = Date.now() - started;
+        result.durationMs = elapsed;
+        recordPriceSyncExecution(result);
+        console.log(`💰 Price sync completed: synced=${result.synced} significant_changes=${result.priceChanges.length} errors=${result.errors.length} in ${elapsed}ms`);
       } catch (e) {
+        const error = { durationMs: 0, error: e.message, synced: 0, priceChanges: [], errors: [e.message] };
+        recordPriceSyncExecution(error);
         console.error('❌ Scheduled price sync failed:', e.message);
       } finally {
         priceSyncRunning = false;
