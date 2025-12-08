@@ -1249,7 +1249,7 @@ router.post('/orders/create-test', requireAdmin, async (req, res) => {
 
     await pool.query(
       'INSERT INTO orders (user_id, order_number, items, subtotal, shipping, discount, total, status, customer_email, shipping_country, shipping_method, created_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, NOW())',
-      ['test-user', orderNumber, items, 100.00, 50.00, 0, 150.00, 'paid', 'test@example.com', 'ZA', 'USPS+']
+      [1, orderNumber, items, 100.00, 50.00, 0, 150.00, 'paid', 'test@example.com', 'ZA', 'USPS+']
     );
 
     res.json({
