@@ -1238,26 +1238,60 @@ router.post('/products/fix-missing-vids', async (req, res) => {
 // Create test order for development/testing
 router.post('/orders/create-test', requireAdmin, async (req, res) => {
   try {
+    // Get a real product with valid cj_vid from curated_products
+    const productResult = await pool.query(`
+      SELECT id, cj_pid, cj_vid, product_name, custom_price 
+      FROM curated_products 
+      WHERE cj_vid IS NOT NULL AND cj_vid != '' AND is_active = TRUE
+      ORDER BY id DESC
+      LIMIT 1
+    `);
+
+    if (productResult.rows.length === 0) {
+      return res.status(400).json({ 
+        error: 'No products with valid cj_vid found. Please add a product with a valid CJ variant ID first.' 
+      });
+    }
+
+    const product = productResult.rows[0];
     const orderNumber = 'TEST-' + Date.now();
     const items = JSON.stringify([{
-      id: '1',
-      name: 'Test Product',
-      price: 100,
-      quantity: 1,
-      cj_vid: '12345'
+      id: product.id.toString(),
+      cj_pid: product.cj_pid,
+      cj_vid: product.cj_vid,
+      name: product.product_name,
+      price: product.custom_price || 100,
+      quantity: 1
     }]);
 
+    const subtotal = product.custom_price || 100;
+    const shipping = 50.00;
+    const total = subtotal + shipping;
+
     await pool.query(
-      'INSERT INTO orders (user_id, order_number, items, subtotal, shipping, discount, total, status, customer_email, shipping_country, shipping_method, created_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, NOW())',
-      [1, orderNumber, items, 100.00, 50.00, 0, 150.00, 'paid', 'test@example.com', 'ZA', 'USPS+']
+      `INSERT INTO orders 
+       (user_id, order_number, items, subtotal, shipping, discount, total, status, 
+        customer_email, customer_name, shipping_country, shipping_province, shipping_city, 
+        shipping_address, shipping_postal_code, shipping_phone, shipping_method, created_at) 
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, NOW())`,
+      [
+        1, orderNumber, items, subtotal, shipping, 0, total, 'paid', 
+        'test@example.com', 'Test Customer', 'ZA', 'Gauteng', 'Johannesburg',
+        '123 Test Street', '2196', '0821234567', 'USPS+'
+      ]
     );
 
     res.json({
       success: true,
-      message: 'Test order created',
+      message: 'Test order created with real product',
       orderNumber,
+      product: {
+        name: product.product_name,
+        cj_pid: product.cj_pid,
+        cj_vid: product.cj_vid
+      },
       status: 'paid',
-      total: 150.00
+      total
     });
   } catch (err) {
     console.error('[admin] Create test order error:', err);
