@@ -1235,3 +1235,33 @@ router.post('/products/fix-missing-vids', async (req, res) => {
   }
 });
 
+// Create test order for development/testing
+router.post('/orders/create-test', requireAdmin, async (req, res) => {
+  try {
+    const orderNumber = 'TEST-' + Date.now();
+    const items = JSON.stringify([{
+      id: '1',
+      name: 'Test Product',
+      price: 100,
+      quantity: 1,
+      cj_vid: '12345'
+    }]);
+
+    await pool.query(
+      'INSERT INTO orders (user_id, order_number, items, subtotal, shipping, discount, total, status, customer_email, shipping_country, shipping_method, created_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, NOW())',
+      ['test-user', orderNumber, items, 100.00, 50.00, 0, 150.00, 'paid', 'test@example.com', 'ZA', 'USPS+']
+    );
+
+    res.json({
+      success: true,
+      message: 'Test order created',
+      orderNumber,
+      status: 'paid',
+      total: 150.00
+    });
+  } catch (err) {
+    console.error('[admin] Create test order error:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
