@@ -51,7 +51,7 @@ router.post('/', async (req, res) => {
       return res.status(400).json({ error: 'Items must be an array' });
     }
 
-    // Validate stock availability for all items - require CJ stock >= 20
+    // Validate stock availability for all items - require total stock >= 100
     if (items.length > 0) {
       const productIds = items.map(item => {
         const id = String(item.id || '').replace('curated-', '');
@@ -59,12 +59,12 @@ router.post('/', async (req, res) => {
       }).filter(id => !isNaN(id));
       
       if (productIds.length > 0) {
-        // Get CJ stock for all products in cart
+        // Get total stock (CJ + factory) for all products in cart
         const stockResult = await pool.query(`
           SELECT 
             cp.id,
             cp.product_name,
-            COALESCE(SUM(cpi.cj_inventory), 0) as total_cj_stock
+            COALESCE(SUM(cpi.total_inventory), 0) as total_stock
           FROM curated_products cp
           LEFT JOIN curated_product_inventories cpi ON cp.id = cpi.curated_product_id
           WHERE cp.id = ANY($1::int[])
@@ -74,10 +74,10 @@ router.post('/', async (req, res) => {
         const soldOutItems = [];
         const stockMap = {};
         for (const row of stockResult.rows) {
-          const cjStock = Number(row.total_cj_stock) || 0;
-          stockMap[row.id] = cjStock;
-          // Products with CJ stock ≤20 are sold out (low stock threshold)
-          if (cjStock <= 20) {
+          const totalStock = Number(row.total_stock) || 0;
+          stockMap[row.id] = totalStock;
+          // Products with total stock <100 are sold out (low stock threshold)
+          if (totalStock < 100) {
             soldOutItems.push(row.product_name);
           }
         }
