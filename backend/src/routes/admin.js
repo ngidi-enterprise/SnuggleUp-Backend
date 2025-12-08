@@ -1019,17 +1019,20 @@ router.post('/orders/:orderId/submit-to-cj', async (req, res) => {
     console.log(`[admin] Submitting order ${order.order_number} to CJ with data:`, JSON.stringify(cjOrderData, null, 2));
     const cjResponse = await cjClient.createOrder(cjOrderData);
 
-    if (!cjResponse.result || !cjResponse.data) {
-      console.error('[admin] CJ order creation failed:', cjResponse);
-      return res.status(500).json({ 
+    // cjClient.createOrder already throws on API failure; validate payload shape here
+    const cjOrderId = cjResponse?.orderId;
+    const cjOrderNumber = cjResponse?.orderNumber || cjResponse?.orderNum;
+
+    if (!cjOrderId) {
+      console.error('[admin] CJ order creation returned no orderId:', cjResponse);
+      return res.status(502).json({ 
         error: 'CJ order creation failed',
-        details: cjResponse.message || 'Unknown error'
+        details: 'Missing orderId from CJ',
+        cjResponse
       });
     }
 
     // 7. Update local order with CJ info
-    const cjOrderId = cjResponse.data.orderId;
-    const cjOrderNumber = cjResponse.data.orderNum;
     await updateOrderCJInfo(orderId, cjOrderId, cjOrderNumber, 'SUBMITTED');
 
     console.log(`[admin] ✓ Order ${order.order_number} submitted to CJ. CJ Order ID: ${cjOrderId}, CJ Order #: ${cjOrderNumber}`);
