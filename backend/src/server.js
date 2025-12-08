@@ -12,6 +12,7 @@ import { router as cartRouter } from './routes/cart.js';
 import { router as shippingRouter } from './routes/shipping.js';
 import { cjClient } from './services/cjClient.js';
 import { syncCuratedInventory } from './services/inventorySync.js';
+import { syncProductPrices } from './services/priceSync.js';
 import db from './db.js';
 
 // Load environment variables
@@ -127,16 +128,19 @@ app.get('/api/health', async (req, res) => {
 
 app.listen(port, () => {
   console.log(`Server running on port ${port}`);
-  // Optional scheduled CJ inventory sync
-  const enabled = process.env.CJ_INVENTORY_SYNC_ENABLED !== 'false';
-  if (enabled) {
-    const intervalMs = Number(process.env.CJ_INVENTORY_SYNC_INTERVAL_MS || 15 * 60 * 1000); // default 15 min
+  
+  // Smart CJ inventory sync: adapts to shopping patterns
+  // Fri-Sun: Every 2 hours (8am-8pm SAST) - high traffic
+  // Mon-Thu: Every 6 hours (8am-8pm SAST) - lower traffic
+  const inventorySyncEnabled = process.env.CJ_INVENTORY_SYNC_ENABLED !== 'false';
+  if (inventorySyncEnabled) {
     let inventorySyncRunning = false;
-    const runSync = async () => {
-      if (inventorySyncRunning) return; // prevent overlapping runs
+    
+    const runInventorySync = async () => {
+      if (inventorySyncRunning) return;
       inventorySyncRunning = true;
       try {
-        const limit = process.env.CJ_INVENTORY_SYNC_BATCH_LIMIT ? Number(process.env.CJ_INVENTORY_SYNC_BATCH_LIMIT) : undefined;
+        const limit = Number(process.env.CJ_INVENTORY_SYNC_BATCH_LIMIT || 50);
         const started = Date.now();
         const result = await syncCuratedInventory({ limit, syncType: 'scheduled' });
         const elapsed = Date.now() - started;
@@ -147,11 +151,113 @@ app.listen(port, () => {
         inventorySyncRunning = false;
       }
     };
-    // Kick off first run shortly after start (stagger to avoid cold start pressure)
-    setTimeout(runSync, 5000);
-    setInterval(runSync, intervalMs);
-    console.log(`⏱️  CJ inventory sync scheduler active (interval=${intervalMs}ms, enabled=${enabled})`);
+
+    const scheduleNextInventorySync = () => {
+      const now = new Date();
+      const dayOfWeek = now.getDay(); // 0=Sun, 1=Mon, ..., 5=Fri, 6=Sat
+      const currentHour = now.getHours();
+      
+      // Weekend (Fri=5, Sat=6, Sun=0): every 2 hours, 8am-8pm
+      const isWeekend = dayOfWeek === 0 || dayOfWeek === 5 || dayOfWeek === 6;
+      const intervalHours = isWeekend ? 2 : 6; // 2h on weekends, 6h on weekdays
+      
+      // Wake hours: 8am-8pm SAST
+      const WAKE_START = 8;
+      const WAKE_END = 20;
+      
+      // Calculate next sync time
+      let nextSync = new Date(now);
+      
+      if (currentHour < WAKE_START) {
+        // Before 8am: schedule for 8am today
+        nextSync.setHours(WAKE_START, 0, 0, 0);
+      } else if (currentHour >= WAKE_END) {
+        // After 8pm: schedule for 8am tomorrow
+        nextSync.setDate(nextSync.getDate() + 1);
+        nextSync.setHours(WAKE_START, 0, 0, 0);
+      } else {
+        // During wake hours: schedule next interval
+        const nextHour = currentHour + intervalHours;
+        if (nextHour >= WAKE_END) {
+          // Next sync would be after 8pm, schedule for 8am tomorrow
+          nextSync.setDate(nextSync.getDate() + 1);
+          nextSync.setHours(WAKE_START, 0, 0, 0);
+        } else {
+          // Schedule for next interval slot
+          nextSync.setHours(nextHour, 0, 0, 0);
+        }
+      }
+      
+      const msUntilNext = nextSync.getTime() - now.getTime();
+      const minutesUntil = Math.round(msUntilNext / 1000 / 60);
+      
+      const dayName = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'][dayOfWeek];
+      const nextDayName = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'][nextSync.getDay()];
+      console.log(`⏱️  Inventory sync (${dayName}): ${isWeekend ? '2h' : '6h'} interval. Next: ${nextDayName} ${nextSync.getHours()}:00 (in ${minutesUntil}min)`);
+      
+      setTimeout(() => {
+        runInventorySync();
+        scheduleNextInventorySync(); // Recursively schedule next run
+      }, msUntilNext);
+    };
+    
+    // Run first sync shortly after startup (if within wake hours)
+    const now = new Date();
+    const currentHour = now.getHours();
+    if (currentHour >= 8 && currentHour < 20) {
+      setTimeout(runInventorySync, 5000); // 5 seconds after startup
+    }
+    
+    scheduleNextInventorySync();
   } else {
     console.log('⏱️  CJ inventory sync scheduler disabled via CJ_INVENTORY_SYNC_ENABLED=false');
+  }
+
+  // Daily price sync at 2am (SAST - South African Standard Time)
+  const priceSyncEnabled = process.env.CJ_PRICE_SYNC_ENABLED !== 'false';
+  if (priceSyncEnabled) {
+    const HOUR_2AM = 2;
+    const MS_PER_DAY = 24 * 60 * 60 * 1000;
+    
+    // Calculate time until next 2am
+    const getTimeUntil2am = () => {
+      const now = new Date();
+      const next2am = new Date();
+      next2am.setHours(HOUR_2AM, 0, 0, 0);
+      
+      // If 2am already passed today, schedule for tomorrow
+      if (now >= next2am) {
+        next2am.setDate(next2am.getDate() + 1);
+      }
+      
+      return next2am.getTime() - now.getTime();
+    };
+
+    let priceSyncRunning = false;
+    const runPriceSync = async () => {
+      if (priceSyncRunning) return;
+      priceSyncRunning = true;
+      try {
+        const limit = Number(process.env.CJ_PRICE_SYNC_BATCH_LIMIT || 200); // Changed from 50 to 200
+        const result = await syncProductPrices({ limit, syncType: 'scheduled' });
+        console.log(`💰 Price sync completed: synced=${result.synced} significant_changes=${result.priceChanges.length} errors=${result.errors.length}`);
+      } catch (e) {
+        console.error('❌ Scheduled price sync failed:', e.message);
+      } finally {
+        priceSyncRunning = false;
+      }
+    };
+
+    // Schedule first run at 2am
+    const timeUntil2am = getTimeUntil2am();
+    console.log(`⏱️  Price sync scheduler active: next run at 2am (in ${Math.round(timeUntil2am / 1000 / 60)} minutes, 200 products)`);
+    
+    setTimeout(() => {
+      runPriceSync();
+      // After first run, schedule daily at 2am
+      setInterval(runPriceSync, MS_PER_DAY);
+    }, timeUntil2am);
+  } else {
+    console.log('⏱️  Price sync scheduler disabled via CJ_PRICE_SYNC_ENABLED=false');
   }
 });
