@@ -1045,6 +1045,7 @@ router.post('/orders/:orderId/submit-to-cj', async (req, res) => {
     // cjClient.createOrder already throws on API failure; validate payload shape here
     const cjOrderId = cjResponse?.orderId;
     const cjOrderNumber = cjResponse?.orderNumber || cjResponse?.orderNum;
+    const cjMessage = cjResponse?.cjMessage; // May contain warnings like "Balance is insufficient"
 
     if (!cjOrderId) {
       console.error('[admin] CJ order creation returned no orderId:', cjResponse);
@@ -1056,16 +1057,22 @@ router.post('/orders/:orderId/submit-to-cj', async (req, res) => {
     }
 
     // 7. Update local order with CJ info
+    // Note: Even if CJ returns a message like "Balance is insufficient", the order was created in CJ
+    // We mark it as SUBMITTED and let the CJ message inform the user about next steps
     await updateOrderCJInfo(orderId, cjOrderId, cjOrderNumber, 'SUBMITTED');
 
     console.log(`[admin] ✓ Order ${order.order_number} submitted to CJ. CJ Order ID: ${cjOrderId}, CJ Order #: ${cjOrderNumber}`);
+    if (cjMessage) {
+      console.log(`[admin] ℹ CJ message: ${cjMessage}`);
+    }
 
     res.json({
       success: true,
       message: 'Order submitted to CJ successfully',
       cjOrderId,
       cjOrderNumber,
-      orderNumber: order.order_number
+      orderNumber: order.order_number,
+      warning: cjMessage // Include CJ's message (e.g., balance warning) in response
     });
 
   } catch (error) {
@@ -1422,4 +1429,3 @@ router.post('/products/sync-cj-prices', async (req, res) => {
     });
   }
 });
-
