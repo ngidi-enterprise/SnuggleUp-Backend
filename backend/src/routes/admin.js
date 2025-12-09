@@ -1291,7 +1291,31 @@ router.post('/orders/create-test', requireAdmin, async (req, res) => {
     }]);
 
     const subtotal = product.custom_price || 100;
-    const shipping = 50.00;
+    
+    // Get real shipping quote from CJ
+    let shipping = 250; // Fallback default
+    let shippingMethod = 'USPS+';
+    try {
+      const { cjClient } = await import('../services/cjClient.js');
+      const quote = await cjClient.getFreightQuote({
+        startCountryCode: 'CN',
+        endCountryCode: 'ZA',
+        postalCode: '2196',
+        products: [{ vid: product.cj_vid, quantity: 1 }]
+      });
+      
+      if (quote && quote.length > 0) {
+        // Convert first quote from USD to ZAR
+        const USD_TO_ZAR = 17.2;
+        const firstQuote = quote[0];
+        shipping = Math.ceil((firstQuote.totalPostage || 0) * USD_TO_ZAR * 100) / 100;
+        shippingMethod = firstQuote.logisticName || 'USPS+';
+        console.log(`[admin] Test order shipping: ${shippingMethod} = R${shipping}`);
+      }
+    } catch (shippingError) {
+      console.warn('[admin] Failed to get real shipping quote, using fallback R250:', shippingError.message);
+    }
+    
     const total = subtotal + shipping;
 
     await pool.query(
@@ -1303,19 +1327,21 @@ router.post('/orders/create-test', requireAdmin, async (req, res) => {
       [
         1, orderNumber, items, subtotal, shipping, 0, total, 'paid', 
         'test@example.com', 'Test Customer', 'ZA', 'Gauteng', 'Johannesburg',
-        '123 Test Street', '2196', '0821234567', 'USPS+'
+        '123 Test Street', '2196', '0821234567', shippingMethod
       ]
     );
 
     res.json({
       success: true,
-      message: 'Test order created with real product',
+      message: 'Test order created with realistic shipping',
       orderNumber,
       product: {
         name: product.product_name,
         cj_pid: product.cj_pid,
         cj_vid: product.cj_vid
       },
+      shippingMethod,
+      shipping,
       status: 'paid',
       total
     });
