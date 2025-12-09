@@ -214,7 +214,7 @@ export const buildCJOrderData = (order) => {
     email: order.customer_email,
     logisticName: order.shipping_method || 'USPS+',
     fromCountryCode: 'CN',
-    payType: 2, // Balance payment
+    payType: 1, // Invoice/Awaiting Payment - orders go to "Imported" tab for review
     products: order.items
       .filter(item => item.cj_vid) // Only include CJ products
       .map(item => ({
