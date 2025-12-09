@@ -183,6 +183,9 @@ router.get('/get-cj-token', async (req, res) => {
 // Get dashboard analytics
 router.get('/analytics', async (req, res) => {
   try {
+    // Always use latest pricing config to calculate profit in ZAR
+    await loadPricingConfig();
+
     // Total orders and revenue
     const ordersResult = await pool.query(`
       SELECT 
@@ -219,8 +222,27 @@ router.get('/analytics', async (req, res) => {
       LIMIT 10
     `);
 
+    // Actual revenue (profit): (retail price - cost in ZAR) * quantity, summed across paid/completed orders
+    const profitResult = await pool.query(
+      `WITH cfg AS (
+          SELECT $1::numeric AS usd_to_zar
+        )
+        SELECT COALESCE(SUM(((item->>'price')::numeric - (cp.cj_cost_price * cfg.usd_to_zar)) 
+                      * (item->>'quantity')::numeric), 0) AS actual_revenue
+        FROM orders o
+        CROSS JOIN jsonb_array_elements(o.items::jsonb) AS item
+        JOIN curated_products cp ON cp.id = (item->>'id')::int
+        CROSS JOIN cfg
+        WHERE o.status IN ('paid', 'completed')
+      `,
+      [USD_TO_ZAR]
+    );
+
     res.json({
-      summary: ordersResult.rows[0],
+      summary: {
+        ...ordersResult.rows[0],
+        actual_revenue: profitResult.rows[0]?.actual_revenue || 0
+      },
       dailyOrders: dailyOrdersResult.rows,
       topProducts: topProductsResult.rows,
     });
