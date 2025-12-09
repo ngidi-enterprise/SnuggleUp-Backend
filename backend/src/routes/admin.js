@@ -1040,7 +1040,35 @@ router.post('/orders/:orderId/submit-to-cj', async (req, res) => {
 
     // 6. Submit order to CJ API
     console.log(`[admin] Submitting order ${order.order_number} to CJ with data:`, JSON.stringify(cjOrderData, null, 2));
-    const cjResponse = await cjClient.createOrder(cjOrderData);
+    let cjResponse;
+    try {
+      cjResponse = await cjClient.createOrder(cjOrderData);
+    } catch (cjError) {
+      console.error('[admin] CJ createOrder failed:', cjError.message);
+      
+      // Provide detailed error info for specific CJ failures
+      if (cjError.message.includes('Balance is insufficient')) {
+        return res.status(402).json({ 
+          error: 'Failed to submit order to supplier',
+          details: 'Supplier account balance is insufficient. Please add funds to your supplier account.',
+          cjError: cjError.message,
+          orderNumber: order.order_number,
+          totalAmount: order.total
+        });
+      }
+      
+      if (cjError.message.includes('Invalid') || cjError.message.includes('invalid')) {
+        return res.status(400).json({ 
+          error: 'Failed to submit order to CJ',
+          details: 'Invalid order data. Check shipping address and product variants.',
+          cjError: cjError.message,
+          orderData: cjOrderData
+        });
+      }
+      
+      // Re-throw for generic error handler below
+      throw cjError;
+    }
 
     // cjClient.createOrder already throws on API failure; validate payload shape here
     const cjOrderId = cjResponse?.orderId;
@@ -1262,8 +1290,12 @@ router.post('/products/fix-missing-vids', async (req, res) => {
 });
 
 // Create test order for development/testing
+// Query params: ?maxTotal=150 - creates order with minimal shipping to stay under budget
 router.post('/orders/create-test', requireAdmin, async (req, res) => {
   try {
+    const maxTotal = req.query.maxTotal ? Number(req.query.maxTotal) : null;
+    const useMinShipping = maxTotal && maxTotal < 200;
+
     // Get a real product with valid cj_vid from curated_products
     const productResult = await pool.query(`
       SELECT id, cj_pid, cj_vid, product_name, custom_price 
@@ -1292,28 +1324,37 @@ router.post('/orders/create-test', requireAdmin, async (req, res) => {
 
     const subtotal = product.custom_price || 100;
     
-    // Get real shipping quote from CJ
+    // Get shipping quote
     let shipping = 250; // Fallback default
     let shippingMethod = 'USPS+';
-    try {
-      const { cjClient } = await import('../services/cjClient.js');
-      const quote = await cjClient.getFreightQuote({
-        startCountryCode: 'CN',
-        endCountryCode: 'ZA',
-        postalCode: '2196',
-        products: [{ vid: product.cj_vid, quantity: 1 }]
-      });
-      
-      if (quote && quote.length > 0) {
-        // Convert first quote from USD to ZAR
-        const USD_TO_ZAR = 17.2;
-        const firstQuote = quote[0];
-        shipping = Math.ceil((firstQuote.totalPostage || 0) * USD_TO_ZAR * 100) / 100;
-        shippingMethod = firstQuote.logisticName || 'USPS+';
-        console.log(`[admin] Test order shipping: ${shippingMethod} = R${shipping}`);
+    
+    if (useMinShipping) {
+      // Use minimal flat shipping for budget testing
+      shipping = 20;
+      shippingMethod = 'TEST-MINIMAL';
+      console.log(`[admin] Test order using minimal shipping: R${shipping} (maxTotal: R${maxTotal})`);
+    } else {
+      // Get real shipping quote from CJ
+      try {
+        const { cjClient } = await import('../services/cjClient.js');
+        const quote = await cjClient.getFreightQuote({
+          startCountryCode: 'CN',
+          endCountryCode: 'ZA',
+          postalCode: '2196',
+          products: [{ vid: product.cj_vid, quantity: 1 }]
+        });
+        
+        if (quote && quote.length > 0) {
+          // Convert first quote from USD to ZAR
+          const USD_TO_ZAR = 17.2;
+          const firstQuote = quote[0];
+          shipping = Math.ceil((firstQuote.totalPostage || 0) * USD_TO_ZAR * 100) / 100;
+          shippingMethod = firstQuote.logisticName || 'USPS+';
+          console.log(`[admin] Test order shipping: ${shippingMethod} = R${shipping}`);
+        }
+      } catch (shippingError) {
+        console.warn('[admin] Failed to get real shipping quote, using fallback R250:', shippingError.message);
       }
-    } catch (shippingError) {
-      console.warn('[admin] Failed to get real shipping quote, using fallback R250:', shippingError.message);
     }
     
     const total = subtotal + shipping;
@@ -1333,7 +1374,7 @@ router.post('/orders/create-test', requireAdmin, async (req, res) => {
 
     res.json({
       success: true,
-      message: 'Test order created with realistic shipping',
+      message: useMinShipping ? 'Test order created with minimal shipping for budget testing' : 'Test order created with realistic shipping',
       orderNumber,
       product: {
         name: product.product_name,
@@ -1343,7 +1384,8 @@ router.post('/orders/create-test', requireAdmin, async (req, res) => {
       shippingMethod,
       shipping,
       status: 'paid',
-      total
+      total,
+      note: useMinShipping ? `Using R20 flat shipping to test balance threshold (maxTotal: R${maxTotal})` : undefined
     });
   } catch (err) {
     console.error('[admin] Create test order error:', err);
