@@ -213,7 +213,7 @@ router.get('/analytics', async (req, res) => {
         COUNT(*) as times_ordered,
         SUM((item->>'price')::numeric * (item->>'quantity')::numeric) as total_revenue
       FROM orders, jsonb_array_elements(items::jsonb) as item
-      WHERE status = 'completed'
+      WHERE status IN ('completed', 'paid', 'pending')
       GROUP BY item->>'name', item->>'id'
       ORDER BY times_ordered DESC
       LIMIT 10
