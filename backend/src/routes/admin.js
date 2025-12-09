@@ -1040,35 +1040,7 @@ router.post('/orders/:orderId/submit-to-cj', async (req, res) => {
 
     // 6. Submit order to CJ API
     console.log(`[admin] Submitting order ${order.order_number} to CJ with data:`, JSON.stringify(cjOrderData, null, 2));
-    let cjResponse;
-    try {
-      cjResponse = await cjClient.createOrder(cjOrderData);
-    } catch (cjError) {
-      console.error('[admin] CJ createOrder failed:', cjError.message);
-      
-      // Provide detailed error info for specific CJ failures
-      if (cjError.message.includes('Balance is insufficient')) {
-        return res.status(402).json({ 
-          error: 'Failed to submit order to supplier',
-          details: 'Supplier account balance is insufficient. Please add funds to your supplier account.',
-          cjError: cjError.message,
-          orderNumber: order.order_number,
-          totalAmount: order.total
-        });
-      }
-      
-      if (cjError.message.includes('Invalid') || cjError.message.includes('invalid')) {
-        return res.status(400).json({ 
-          error: 'Failed to submit order to CJ',
-          details: 'Invalid order data. Check shipping address and product variants.',
-          cjError: cjError.message,
-          orderData: cjOrderData
-        });
-      }
-      
-      // Re-throw for generic error handler below
-      throw cjError;
-    }
+    const cjResponse = await cjClient.createOrder(cjOrderData);
 
     // cjClient.createOrder already throws on API failure; validate payload shape here
     const cjOrderId = cjResponse?.orderId;
@@ -1319,45 +1291,25 @@ router.post('/orders/create-test', requireAdmin, async (req, res) => {
     }]);
 
     const subtotal = product.custom_price || 100;
-    
-    // Fetch real shipping quote from CJ - use cheapest option
-    let shipping = 0;
-    try {
-      const quote = await cjClient.getFreightQuote({
-        endCountryCode: 'ZA',
-        weight: 1.0,
-        value: subtotal
-      });
-      if (quote && quote.freight) {
-        const USD_TO_ZAR_TEST = 17.2;
-        shipping = Math.round(parseFloat(quote.freight) * USD_TO_ZAR_TEST * 100) / 100;
-        console.log(`[test-order] Real shipping quote: $${quote.freight} USD → R${shipping} ZAR`);
-      } else {
-        throw new Error('No freight quote received from supplier');
-      }
-    } catch (quoteErr) {
-      console.error(`[test-order] Shipping quote fetch failed:`, quoteErr.message);
-      throw new Error(`Unable to calculate shipping: ${quoteErr.message}`);
-    }
-    
+    const shipping = 50.00;
     const total = subtotal + shipping;
 
     await pool.query(
       `INSERT INTO orders 
        (user_id, order_number, items, subtotal, shipping, discount, total, status, 
         customer_email, customer_name, shipping_country, shipping_province, shipping_city, 
-        shipping_address, shipping_postal_code, shipping_phone, created_at) 
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, NOW())`,
+        shipping_address, shipping_postal_code, shipping_phone, shipping_method, created_at) 
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, NOW())`,
       [
         1, orderNumber, items, subtotal, shipping, 0, total, 'paid', 
         'test@example.com', 'Test Customer', 'ZA', 'Gauteng', 'Johannesburg',
-        '123 Test Street', '2196', '0821234567'
+        '123 Test Street', '2196', '0821234567', 'USPS+'
       ]
     );
 
     res.json({
       success: true,
-      message: 'Test order created',
+      message: 'Test order created with real product',
       orderNumber,
       product: {
         name: product.product_name,
@@ -1365,8 +1317,6 @@ router.post('/orders/create-test', requireAdmin, async (req, res) => {
         cj_vid: product.cj_vid
       },
       status: 'paid',
-      subtotal,
-      shipping,
       total
     });
   } catch (err) {
