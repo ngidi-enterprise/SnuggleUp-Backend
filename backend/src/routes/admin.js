@@ -1287,6 +1287,39 @@ router.post('/orders/create-test', requireAdmin, async (req, res) => {
     }
 
     const product = productResult.rows[0];
+    const subtotal = product.custom_price || 100;
+
+    // Get real shipping quotes from CJ and pick the cheapest
+    let shipping = 50.00; // Fallback
+    let shippingMethod = 'Unknown';
+    
+    try {
+      console.log(`[admin] Fetching shipping quotes for test order (vid: ${product.cj_vid})`);
+      const quotes = await cjClient.getFreightQuote({
+        endCountryCode: 'ZA',
+        products: [{ vid: product.cj_vid, quantity: 1 }]
+      });
+
+      if (quotes && quotes.length > 0) {
+        // Find cheapest quote
+        const cheapest = quotes.reduce((min, current) => 
+          (current.totalPostage < min.totalPostage) ? current : min
+        );
+        
+        // Convert from USD to ZAR
+        const usdToZar = 17.2;
+        shipping = Math.round(cheapest.totalPostage * usdToZar * 100) / 100;
+        shippingMethod = cheapest.logisticName;
+        
+        console.log(`[admin] Using cheapest shipping: ${shippingMethod} - $${cheapest.totalPostage} USD = R${shipping} ZAR`);
+      } else {
+        console.warn('[admin] No shipping quotes returned, using fallback R50');
+      }
+    } catch (err) {
+      console.warn('[admin] Failed to fetch shipping quotes, using fallback R50:', err.message);
+    }
+
+    const total = subtotal + shipping;
     const orderNumber = 'TEST-' + Date.now();
     const items = JSON.stringify([{
       id: product.id.toString(),
@@ -1297,10 +1330,6 @@ router.post('/orders/create-test', requireAdmin, async (req, res) => {
       quantity: 1
     }]);
 
-    const subtotal = product.custom_price || 100;
-    const shipping = 50.00;
-    const total = subtotal + shipping;
-
     await pool.query(
       `INSERT INTO orders 
        (user_id, order_number, items, subtotal, shipping, discount, total, status, 
@@ -1310,18 +1339,23 @@ router.post('/orders/create-test', requireAdmin, async (req, res) => {
       [
         1, orderNumber, items, subtotal, shipping, 0, total, 'paid', 
         'test@example.com', 'Test Customer', 'ZA', 'Gauteng', 'Johannesburg',
-        '123 Test Street', '2196', '0821234567', 'USPS+'
+        '123 Test Street', '2196', '0821234567', shippingMethod
       ]
     );
 
     res.json({
       success: true,
-      message: 'Test order created with real product',
+      message: 'Test order created with real product and cheapest shipping',
       orderNumber,
       product: {
         name: product.product_name,
         cj_pid: product.cj_pid,
         cj_vid: product.cj_vid
+      },
+      shipping: {
+        method: shippingMethod,
+        cost: shipping,
+        currency: 'ZAR'
       },
       status: 'paid',
       total
