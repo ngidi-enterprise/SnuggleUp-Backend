@@ -396,7 +396,11 @@ export const cjClient = {
       headers: { 'CJ-Access-Token': accessToken },
     });
 
-    if (!json.result || !json.data) {
+    // CJ may return result: false with a message, but still create the order and return orderId in data
+    // This happens with "Balance is insufficient" - the order exists in CJ but payment is flagged
+    const hasOrderId = json.data && json.data.orderId;
+    
+    if (!hasOrderId) {
       throw new Error('CJ createOrder failed: ' + (json.message || 'Unknown error'));
     }
 
@@ -409,6 +413,7 @@ export const cjClient = {
       postageAmount: json.data.postageAmount,
       orderStatus: json.data.orderStatus,
       productInfoList: json.data.productInfoList,
+      cjMessage: json.message, // Capture any warning/error message from CJ
     };
   },
 
