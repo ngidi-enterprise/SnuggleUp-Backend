@@ -1290,12 +1290,8 @@ router.post('/products/fix-missing-vids', async (req, res) => {
 });
 
 // Create test order for development/testing
-// Query params: ?maxTotal=150 - creates order with minimal shipping to stay under budget
 router.post('/orders/create-test', requireAdmin, async (req, res) => {
   try {
-    const maxTotal = req.query.maxTotal ? Number(req.query.maxTotal) : null;
-    const useMinShipping = maxTotal && maxTotal < 200;
-
     // Get a real product with valid cj_vid from curated_products
     const productResult = await pool.query(`
       SELECT id, cj_pid, cj_vid, product_name, custom_price 
@@ -1323,69 +1319,33 @@ router.post('/orders/create-test', requireAdmin, async (req, res) => {
     }]);
 
     const subtotal = product.custom_price || 100;
-    
-    // Get shipping quote
-    let shipping = 250; // Fallback default
-    let shippingMethod = 'USPS+';
-    
-    if (useMinShipping) {
-      // Use minimal flat shipping for budget testing
-      shipping = 20;
-      shippingMethod = 'TEST-MINIMAL';
-      console.log(`[admin] Test order using minimal shipping: R${shipping} (maxTotal: R${maxTotal})`);
-    } else {
-      // Get real shipping quote from CJ
-      try {
-        const { cjClient } = await import('../services/cjClient.js');
-        const quote = await cjClient.getFreightQuote({
-          startCountryCode: 'CN',
-          endCountryCode: 'ZA',
-          postalCode: '2196',
-          products: [{ vid: product.cj_vid, quantity: 1 }]
-        });
-        
-        if (quote && quote.length > 0) {
-          // Convert first quote from USD to ZAR
-          const USD_TO_ZAR = 17.2;
-          const firstQuote = quote[0];
-          shipping = Math.ceil((firstQuote.totalPostage || 0) * USD_TO_ZAR * 100) / 100;
-          shippingMethod = firstQuote.logisticName || 'USPS+';
-          console.log(`[admin] Test order shipping: ${shippingMethod} = R${shipping}`);
-        }
-      } catch (shippingError) {
-        console.warn('[admin] Failed to get real shipping quote, using fallback R250:', shippingError.message);
-      }
-    }
-    
+    const shipping = 50.00;
     const total = subtotal + shipping;
 
     await pool.query(
       `INSERT INTO orders 
        (user_id, order_number, items, subtotal, shipping, discount, total, status, 
         customer_email, customer_name, shipping_country, shipping_province, shipping_city, 
-        shipping_address, shipping_postal_code, shipping_phone, shipping_method, created_at) 
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, NOW())`,
+        shipping_address, shipping_postal_code, shipping_phone, created_at) 
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, NOW())`,
       [
         1, orderNumber, items, subtotal, shipping, 0, total, 'paid', 
         'test@example.com', 'Test Customer', 'ZA', 'Gauteng', 'Johannesburg',
-        '123 Test Street', '2196', '0821234567', shippingMethod
+        '123 Test Street', '2196', '0821234567'
       ]
     );
 
     res.json({
       success: true,
-      message: useMinShipping ? 'Test order created with minimal shipping for budget testing' : 'Test order created with realistic shipping',
+      message: 'Test order created',
       orderNumber,
       product: {
         name: product.product_name,
         cj_pid: product.cj_pid,
         cj_vid: product.cj_vid
       },
-      shippingMethod,
-      shipping,
       status: 'paid',
-      total,
-      note: useMinShipping ? `Using R20 flat shipping to test balance threshold (maxTotal: R${maxTotal})` : undefined
+      total
     });
   } catch (err) {
     console.error('[admin] Create test order error:', err);
