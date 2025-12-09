@@ -1319,7 +1319,24 @@ router.post('/orders/create-test', requireAdmin, async (req, res) => {
     }]);
 
     const subtotal = product.custom_price || 100;
-    const shipping = 50.00;
+    
+    // Fetch real shipping quote from CJ
+    let shipping = 250.00; // Fallback if quote fails
+    try {
+      const quote = await cjClient.getFreightQuote({
+        countryCode: 'ZA',
+        weight: 1.0,
+        value: subtotal
+      });
+      if (quote && quote.freight) {
+        const USD_TO_ZAR_TEST = 17.2;
+        shipping = Math.round(parseFloat(quote.freight) * USD_TO_ZAR_TEST * 100) / 100;
+        console.log(`[test-order] Real shipping quote: $${quote.freight} USD → R${shipping} ZAR`);
+      }
+    } catch (quoteErr) {
+      console.warn(`[test-order] Shipping quote fetch failed, using fallback R250:`, quoteErr.message);
+    }
+    
     const total = subtotal + shipping;
 
     await pool.query(
@@ -1345,6 +1362,8 @@ router.post('/orders/create-test', requireAdmin, async (req, res) => {
         cj_vid: product.cj_vid
       },
       status: 'paid',
+      subtotal,
+      shipping,
       total
     });
   } catch (err) {
