@@ -1324,7 +1324,7 @@ router.post('/orders/create-test', requireAdmin, async (req, res) => {
     let shipping = 0;
     try {
       const quote = await cjClient.getFreightQuote({
-        countryCode: 'ZA',
+        endCountryCode: 'ZA',
         weight: 1.0,
         value: subtotal
       });
