@@ -1320,8 +1320,8 @@ router.post('/orders/create-test', requireAdmin, async (req, res) => {
 
     const subtotal = product.custom_price || 100;
     
-    // Fetch real shipping quote from CJ
-    let shipping = 250.00; // Fallback if quote fails
+    // Fetch real shipping quote from CJ - use cheapest option
+    let shipping = 0;
     try {
       const quote = await cjClient.getFreightQuote({
         countryCode: 'ZA',
@@ -1332,9 +1332,12 @@ router.post('/orders/create-test', requireAdmin, async (req, res) => {
         const USD_TO_ZAR_TEST = 17.2;
         shipping = Math.round(parseFloat(quote.freight) * USD_TO_ZAR_TEST * 100) / 100;
         console.log(`[test-order] Real shipping quote: $${quote.freight} USD → R${shipping} ZAR`);
+      } else {
+        throw new Error('No freight quote received from supplier');
       }
     } catch (quoteErr) {
-      console.warn(`[test-order] Shipping quote fetch failed, using fallback R250:`, quoteErr.message);
+      console.error(`[test-order] Shipping quote fetch failed:`, quoteErr.message);
+      throw new Error(`Unable to calculate shipping: ${quoteErr.message}`);
     }
     
     const total = subtotal + shipping;
