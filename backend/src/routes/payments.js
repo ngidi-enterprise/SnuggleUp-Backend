@@ -124,11 +124,26 @@ router.post('/create', optionalAuth, async (req, res) => {
 
     // Create order record in database (with pending status)
     const userId = req.user?.userId || 'guest';
+    
+    console.log('🔍 Debug - User info:', {
+      userId,
+      userIdType: typeof userId,
+      userName: req.user?.name,
+      userEmail: req.user?.email
+    });
+    
     // Merge/derive shipping details: allow frontend-provided values, fallback to user name when available
     const safeShippingDetails = {
       ...(shippingDetails || {}),
       customerName: (shippingDetails && shippingDetails.customerName) || req.user?.name || undefined,
     };
+
+    console.log('🔍 Debug - Order items:', orderItems?.map(item => ({
+      id: item.id,
+      idType: typeof item.id,
+      name: item.name,
+      quantity: item.quantity
+    })));
 
     try {
       await createOrder(userId, {
@@ -146,7 +161,8 @@ router.post('/create', optionalAuth, async (req, res) => {
       });
       console.log('✅ Order created:', orderNumber);
     } catch (orderError) {
-      console.error('Failed to create order record:', orderError);
+      console.error('❌ Failed to create order record:', orderError);
+      console.error('❌ Order creation failed with userId:', userId, 'type:', typeof userId);
       // Continue with payment even if order creation fails - webhook will update it
     }
     
