@@ -71,6 +71,14 @@ export const createOrder = async (userId, orderData) => {
       shippingDetails
     } = orderData;
     
+    console.log('🔍 createOrder called with:', {
+      userId,
+      userIdType: typeof userId,
+      orderNumber,
+      itemCount: items?.length,
+      items: items?.map(i => ({ id: i.id, idType: typeof i.id, name: i.name }))
+    });
+    
     // Ensure numeric values are actual numbers, not strings
     const numSubtotal = parseFloat(subtotal) || 0;
     const numShipping = parseFloat(shipping) || 0;
@@ -78,6 +86,11 @@ export const createOrder = async (userId, orderData) => {
     const numTotal = parseFloat(total) || 0;
     const numInsuranceCost = parseFloat(insurance?.cost) || 0;
     const numInsuranceCoverage = parseFloat(insurance?.coverage) || 0;
+    
+    // Ensure userId is a string (not undefined or null)
+    const safeUserId = String(userId || 'guest');
+    
+    console.log('🔍 About to insert order with userId:', safeUserId, 'type:', typeof safeUserId);
     
     const result = await db.query(
       `INSERT INTO orders (
@@ -88,7 +101,7 @@ export const createOrder = async (userId, orderData) => {
       )
        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20) RETURNING id`,
       [
-        userId,
+        safeUserId,
         orderNumber,
         JSON.stringify(items),
         numSubtotal,
@@ -214,7 +227,7 @@ export const buildCJOrderData = (order) => {
     email: order.customer_email,
     logisticName: order.shipping_method || 'USPS+',
     fromCountryCode: 'CN',
-    payType: 2, // Invoice/Awaiting Payment - orders go to "Imported" tab for review
+    payType: 2, // Balance payment
     products: order.items
       .filter(item => item.cj_vid) // Only include CJ products
       .map(item => ({
@@ -224,5 +237,4 @@ export const buildCJOrderData = (order) => {
     remark: `SnuggleUp Order ${order.order_number}`
   };
 };
-
 
