@@ -163,24 +163,27 @@ router.post('/create', optionalAuth, async (req, res) => {
       m_payment_id: orderNumber,
       amount: parseFloat(amount).toFixed(2),
       item_name: `Order ${orderItems?.length || 0} items`,
-      item_description: orderItems?.map(i => i.name).join(', ').substring(0, 100) || 'SnuggleUp order',
     };
 
-    // In sandbox mode PayFast expects test=1 to be present (and included in signature)
+    // Only include item_description if it's not empty
+    const itemDesc = orderItems?.map(i => i.name).join(', ').substring(0, 100);
+    if (itemDesc && itemDesc.trim().length > 0) {
+      data.item_description = itemDesc;
+    }
+
+    // Generate signature according to PayFast specs (test flag NOT included in signature)
+    const signature = generateSignature(data, passphrase);
+    data.signature = signature;
+
+    // Add test flag AFTER signature generation - it's not part of the signature
     if (testMode) {
       data.test = 1;
     }
-
-    // Generate signature according to PayFast specs
-    const signature = generateSignature(data, passphrase);
-    data.signature = signature;
 
     // In test mode, use sandbox URL
     const payfastUrl = testMode
       ? 'https://sandbox.payfast.co.za/eng/process'
       : 'https://www.payfast.co.za/eng/process';
-
-    // Note: test flag already included above (prior to signature)
 
     console.log('✅ PayFast URL generated:', payfastUrl);
     console.log('📝 Payment data (posting):', { ...data, signature: signature.substring(0, 10) + '...' });
@@ -393,11 +396,13 @@ function generateSignature(data, passphrase = '') {
   // The order matters! Based on their integration test page, the order is:
   // merchant_id, merchant_key, return_url, cancel_url, notify_url, name_first,
   // email_address, m_payment_id, amount, item_name, item_description
+  // NOTE: test flag is NOT included in signature
   
   const signatureData = { ...data };
   delete signatureData.signature; // Remove signature from data before signing
+  delete signatureData.test; // Remove test flag - it's not part of signature
   
-  // Try the exact order shown in PayFast integration test form
+  // Exact field order from PayFast documentation
   const fieldOrder = [
     'merchant_id',
     'merchant_key',
@@ -411,26 +416,23 @@ function generateSignature(data, passphrase = '') {
     'item_name',
     'item_description'
   ];
-  // Include test flag if present (for sandbox mode)
-  if (data.test !== undefined) {
-    fieldOrder.push('test');
-  }
   
-  // Filter to fields that exist (PayFast includes empty strings in signature)
+  // Filter to fields that exist in data (skip undefined/null)
   const signingKeys = fieldOrder.filter(
     k => signatureData[k] !== undefined && 
          signatureData[k] !== null
   );
 
-  console.log('🔍 Fields being signed (PayFast form order):');
+  console.log('🔍 Fields being signed (PayFast form order - URL encoded):');
   signingKeys.forEach(key => {
-    const displayValue = String(signatureData[key]).substring(0, 80) + (String(signatureData[key]).length > 80 ? '...' : '');
+    const encodedValue = encodeURIComponent(String(signatureData[key]));
+    const displayValue = encodedValue.substring(0, 80) + (encodedValue.length > 80 ? '...' : '');
     console.log(`  ${key}=${displayValue}`);
   });
 
-  // Build signature string: key=value (RAW values, NO URL encoding)
+  // Build signature string with URL ENCODING - critical for PayFast validation
   const signatureString = signingKeys
-    .map(key => `${key}=${signatureData[key]}`)
+    .map(key => `${key}=${encodeURIComponent(String(signatureData[key]))}`)
     .join('&');
 
   // Append passphrase ONLY if it's actually set and non-empty
