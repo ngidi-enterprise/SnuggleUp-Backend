@@ -111,11 +111,20 @@ async function initDb() {
   
   // Migration: Change user_id from INTEGER to TEXT for Supabase UUID compatibility
   try {
-    await pool.query(`ALTER TABLE orders ALTER COLUMN user_id TYPE TEXT;`);
+    // Use USING clause to convert existing integer IDs to text
+    await pool.query(`ALTER TABLE orders ALTER COLUMN user_id TYPE TEXT USING user_id::TEXT;`);
     console.log('✅ Migrated orders.user_id to TEXT for Supabase UUIDs');
   } catch (err) {
-    // Column might already be TEXT or migration already ran
-    console.log('ℹ️ orders.user_id migration skipped:', err.message);
+    // If migration fails, log the error but continue
+    console.log('⚠️ orders.user_id migration issue:', err.message);
+    // Check current type
+    try {
+      const typeCheck = await pool.query(`
+        SELECT data_type FROM information_schema.columns 
+        WHERE table_name = 'orders' AND column_name = 'user_id'
+      `);
+      console.log('📊 Current user_id type:', typeCheck.rows[0]?.data_type);
+    } catch {}
   }
 
   // Admin role column
