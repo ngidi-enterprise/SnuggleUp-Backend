@@ -121,6 +121,8 @@ async function initDb() {
     
     if (currentType === 'integer') {
       console.log('🔄 Converting user_id from INTEGER to TEXT...');
+      // Drop legacy FK that points to users.id (integer) so we can widen the column
+      await pool.query(`ALTER TABLE orders DROP CONSTRAINT IF EXISTS orders_user_id_fkey;`);
       // Use USING clause to convert existing integer IDs to text
       await pool.query(`ALTER TABLE orders ALTER COLUMN user_id TYPE TEXT USING user_id::TEXT;`);
       console.log('✅ Migrated orders.user_id to TEXT for Supabase UUIDs');
