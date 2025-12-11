@@ -441,16 +441,17 @@ function generateSignature(data, passphrase = '') {
          signatureData[k] !== null
   );
 
-  console.log('🔍 Fields being signed (PayFast form order - URL encoded):');
+  console.log('🔍 Fields being signed (PayFast form order - RAW unencoded values):');
   signingKeys.forEach(key => {
-    const encodedValue = encodeURIComponent(String(signatureData[key]));
-    const displayValue = encodedValue.substring(0, 80) + (encodedValue.length > 80 ? '...' : '');
+    const rawValue = String(signatureData[key]);
+    const displayValue = rawValue.substring(0, 80) + (rawValue.length > 80 ? '...' : '');
     console.log(`  ${key}=${displayValue}`);
   });
 
-  // Build signature string with URL ENCODING - critical for PayFast validation
+  // Build signature string WITHOUT URL ENCODING - PayFast expects raw values in signature
+  // Only URL encoding is needed when POSTING form fields, not for the signature hash itself
   const signatureString = signingKeys
-    .map(key => `${key}=${encodeURIComponent(String(signatureData[key]))}`)
+    .map(key => `${key}=${String(signatureData[key])}`)
     .join('&');
 
   // Append passphrase ONLY if it's actually set and non-empty
