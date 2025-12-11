@@ -111,20 +111,25 @@ async function initDb() {
   
   // Migration: Change user_id from INTEGER to TEXT for Supabase UUID compatibility
   try {
-    // Use USING clause to convert existing integer IDs to text
-    await pool.query(`ALTER TABLE orders ALTER COLUMN user_id TYPE TEXT USING user_id::TEXT;`);
-    console.log('✅ Migrated orders.user_id to TEXT for Supabase UUIDs');
+    // Check current type first
+    const typeCheck = await pool.query(`
+      SELECT data_type FROM information_schema.columns 
+      WHERE table_name = 'orders' AND column_name = 'user_id'
+    `);
+    const currentType = typeCheck.rows[0]?.data_type;
+    console.log('📊 Current user_id type:', currentType);
+    
+    if (currentType === 'integer') {
+      console.log('🔄 Converting user_id from INTEGER to TEXT...');
+      // Use USING clause to convert existing integer IDs to text
+      await pool.query(`ALTER TABLE orders ALTER COLUMN user_id TYPE TEXT USING user_id::TEXT;`);
+      console.log('✅ Migrated orders.user_id to TEXT for Supabase UUIDs');
+    } else if (currentType === 'text') {
+      console.log('✅ user_id is already TEXT - no migration needed');
+    }
   } catch (err) {
-    // If migration fails, log the error but continue
-    console.log('⚠️ orders.user_id migration issue:', err.message);
-    // Check current type
-    try {
-      const typeCheck = await pool.query(`
-        SELECT data_type FROM information_schema.columns 
-        WHERE table_name = 'orders' AND column_name = 'user_id'
-      `);
-      console.log('📊 Current user_id type:', typeCheck.rows[0]?.data_type);
-    } catch {}
+    console.error('❌ orders.user_id migration failed:', err.message);
+    console.error('Full error:', err);
   }
 
   // Admin role column
