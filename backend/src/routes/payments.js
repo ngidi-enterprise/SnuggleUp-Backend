@@ -181,11 +181,13 @@ router.post('/create', optionalAuth, async (req, res) => {
       item_name: `Order ${orderItems?.length || 0} items`,
     };
 
-    // Only include item_description if it's not empty
-    const itemDesc = orderItems?.map(i => i.name).join(', ').substring(0, 100);
-    if (itemDesc && itemDesc.trim().length > 0) {
-      data.item_description = itemDesc;
-    }
+    // REMOVED: item_description causes PayFast 400 errors in sandbox
+    // PayFast's working example had NO item_description field
+    // Uncomment if needed for production after testing:
+    // const itemDesc = orderItems?.map(i => i.name).join(', ').substring(0, 100);
+    // if (itemDesc && itemDesc.trim().length > 0) {
+    //   data.item_description = itemDesc;
+    // }
 
     // Generate signature according to PayFast specs (test flag NOT included in signature)
     const signature = generateSignature(data, passphrase);
