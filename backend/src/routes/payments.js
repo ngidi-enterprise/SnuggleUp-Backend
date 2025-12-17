@@ -269,12 +269,9 @@ router.post('/test-signature', async (req, res) => {
     // Adding test=1 after would invalidate it
     const testData = { ...formData, signature };
     
-    // PayFast validation endpoint expects fields in ALPHABETICAL ORDER
-    const sortedEntries = Object.entries(testData).sort(([keyA], [keyB]) => keyA.localeCompare(keyB));
-    
-    // Build form body WITHOUT URL encoding (PayFast expects raw values)
-    const formBody = sortedEntries
-      .map(([k, v]) => `${k}=${v}`)
+    // Build form body using PayFast encoding rules (URL-encode and replace spaces with '+')
+    const formBody = Object.entries(testData)
+      .map(([k, v]) => `${k}=${encodeURIComponent(String(v)).replace(/%20/g, '+')}`)
       .join('&');
     
     console.log('📤 Sending to PayFast validation endpoint');
@@ -441,16 +438,19 @@ function generateSignature(data, passphrase = '') {
          signatureData[k] !== null
   );
 
-  console.log('🔍 Fields being signed (PayFast form order - URL encoded values):');
+  console.log('🔍 Fields being signed (PayFast form order - URL encoded with + for spaces):');
   signingKeys.forEach(key => {
-    const encodedValue = encodeURIComponent(String(signatureData[key]));
+    const encodedValue = encodeURIComponent(String(signatureData[key])).replace(/%20/g, '+');
     const displayValue = encodedValue.substring(0, 80) + (encodedValue.length > 80 ? '...' : '');
     console.log(`  ${key}=${displayValue}`);
   });
 
-  // Build signature string WITH URL ENCODING to match form POST encoding
+  // Build signature string WITH URL ENCODING and replace spaces with '+' per PayFast docs
   const signatureString = signingKeys
-    .map(key => `${key}=${encodeURIComponent(String(signatureData[key]))}`)
+    .map(key => {
+      const val = encodeURIComponent(String(signatureData[key])).replace(/%20/g, '+');
+      return `${key}=${val}`;
+    })
     .join('&');
 
   // Append passphrase ONLY if it's actually set and non-empty
