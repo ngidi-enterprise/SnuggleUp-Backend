@@ -302,13 +302,13 @@ router.post('/test-signature', async (req, res) => {
 // Handle PayFast success redirect
 router.get('/success', (req, res) => {
   const frontendUrl = process.env.FRONTEND_URL || 'https://snuggleup.co.za';
-  res.redirect(`${frontendUrl}/checkout/success`);
+  res.redirect(`${frontendUrl}/#/checkout/success`);
 });
 
 // Handle PayFast cancel redirect
 router.get('/cancel', (req, res) => {
   const frontendUrl = process.env.FRONTEND_URL || 'https://snuggleup.co.za';
-  res.redirect(`${frontendUrl}/checkout/cancel`);
+  res.redirect(`${frontendUrl}/#/checkout/cancel`);
 });
 
 // Handle PayFast notification
