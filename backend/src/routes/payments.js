@@ -338,8 +338,11 @@ router.post('/notify', async (req, res) => {
 
     // 3. Process payment status (signature match is sufficient for now)
     const paymentStatus = params.payment_status;
-    const orderNumber = params.m_payment_id; // we used m_payment_id as orderNumber earlier
+    const orderNumber = params.m_payment_id;
     const payfastPaymentId = params.pf_payment_id;
+
+    console.log('📊 IPN Raw params:', params);
+    console.log('📊 IPN params keys:', Object.keys(params).sort());
 
     console.log('📊 IPN Notification:', { 
       paymentStatus, 
@@ -432,7 +435,8 @@ function generateSignature(data, passphrase = '') {
     'item_description'
   ];
   
-  // Filter to fields that exist in data (skip undefined/null)
+  // Filter to fields that exist in data (skip only undefined/null, NOT empty strings)
+  // PayFast IPN includes empty fields like item_description="", so we must include them too
   const signingKeys = fieldOrder.filter(
     k => signatureData[k] !== undefined && 
          signatureData[k] !== null
