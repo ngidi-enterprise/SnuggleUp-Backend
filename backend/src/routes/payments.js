@@ -490,25 +490,27 @@ function generateSignature(data, passphrase = '') {
 // Build signature by iterating through params as they are received
 function generateSignatureFromIPNData(params, passphrase = '') {
   // Per PayFast docs: "The string that gets created needs to include all fields posted from Payfast"
-  // Following their PHP example: iterate through $pfData, skip empty values, stop at signature
+  // CRITICAL: PayFast IPN includes ALL fields, even empty strings like item_description=""
+  // We must include them ALL (skip only undefined/null, NOT empty strings)
   
-  console.log('🔍 IPN Signature validation - Processing fields in received order:');
+  console.log('🔍 IPN Signature validation - Processing ALL fields in received order:');
   
   // Build signature string by going through each param (except signature)
   let signatureString = '';
   const processedKeys = [];
   
   for (const [key, value] of Object.entries(params)) {
-    if (key === 'signature') break; // Stop at signature field per PayFast's loop
+    if (key === 'signature') break; // Stop at signature field
     
-    // Only include non-blank values (like PayFast does: if($val !== '') )
-    if (value !== '' && value !== undefined && value !== null) {
+    // Include ALL fields sent by PayFast (skip only undefined/null, but INCLUDE empty strings)
+    if (value !== undefined && value !== null) {
       const val = encodeURIComponent(String(value)).replace(/%20/g, '+');
       signatureString += `${key}=${val}&`;
       processedKeys.push(key);
-      console.log(`  ✓ ${key}=${val.substring(0, 80)}`);
+      const displayVal = value === '' ? '""' : val.substring(0, 80);
+      console.log(`  ✓ ${key}=${displayVal}`);
     } else {
-      console.log(`  ✗ ${key}="${value}" (skipped - blank value)`);
+      console.log(`  ✗ ${key}=null (skipped - undefined/null)`);
     }
   }
   
