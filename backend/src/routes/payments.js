@@ -327,7 +327,11 @@ router.post('/notify', async (req, res) => {
       : (rawPassphrase && typeof rawPassphrase === 'string' && rawPassphrase.trim().length > 0) 
         ? rawPassphrase.trim() 
         : '';
-    const localSig = generateSignature(params, passphrase);
+    
+    // IMPORTANT: For IPN validation, we must use the EXACT fields PayFast sends
+    // NOT the form submission fields. Build signature string exactly as PayFast does:
+    // iterate through params in order, URL-encode each, replace spaces with +
+    const localSig = generateSignatureFromIPNData(params, passphrase);
     const signaturesMatch = localSig === receivedSignature;
 
     // 2. Validate source IP (best-effort; optional)
@@ -408,9 +412,9 @@ router.post('/notify', async (req, res) => {
   }
 });
 
-// Helper function to generate PayFast signature according to their specs
+// Helper function to generate PayFast signature for FORM submission (specific field order)
 function generateSignature(data, passphrase = '') {
-  // PayFast signature: specific fields in a specific order (as shown in their form)
+  // PayFast signature for FORM: specific fields in a specific order (as shown in their form)
   // The order matters! Based on their integration test page, the order is:
   // merchant_id, merchant_key, return_url, cancel_url, notify_url, name_first,
   // email_address, m_payment_id, amount, item_name, item_description
@@ -477,6 +481,59 @@ function generateSignature(data, passphrase = '') {
     .digest('hex');
 
   console.log('🔐 MD5 hash:', hash);
+
+  return hash;
+}
+
+// Helper function to generate PayFast signature for IPN validation
+// For IPN, PayFast includes ALL fields it sends back, not just form fields
+// Build signature by iterating through params as they are received
+function generateSignatureFromIPNData(params, passphrase = '') {
+  // Per PayFast docs: "The string that gets created needs to include all fields posted from Payfast"
+  // Following their PHP example: iterate through $pfData, skip empty values, stop at signature
+  
+  console.log('🔍 IPN Signature validation - Processing fields in received order:');
+  
+  // Build signature string by going through each param (except signature)
+  let signatureString = '';
+  const processedKeys = [];
+  
+  for (const [key, value] of Object.entries(params)) {
+    if (key === 'signature') break; // Stop at signature field per PayFast's loop
+    
+    // Only include non-blank values (like PayFast does: if($val !== '') )
+    if (value !== '' && value !== undefined && value !== null) {
+      const val = encodeURIComponent(String(value)).replace(/%20/g, '+');
+      signatureString += `${key}=${val}&`;
+      processedKeys.push(key);
+      console.log(`  ✓ ${key}=${val.substring(0, 80)}`);
+    } else {
+      console.log(`  ✗ ${key}="${value}" (skipped - blank value)`);
+    }
+  }
+  
+  // Remove trailing ampersand
+  signatureString = signatureString.slice(0, -1);
+  
+  // Append passphrase if set
+  let finalString = signatureString;
+  const trimmedPassphrase = passphrase ? passphrase.trim() : '';
+  if (trimmedPassphrase.length > 0) {
+    finalString = `${signatureString}&passphrase=${encodeURIComponent(trimmedPassphrase).replace(/%20/g, '+')}`;
+    console.log(`✓ Passphrase appended (length: ${trimmedPassphrase.length})`);
+  } else {
+    console.log('ℹ️ No passphrase used');
+  }
+  
+  console.log('🔐 FULL IPN Signature string:', finalString);
+  console.log('🔐 String length:', finalString.length);
+  
+  const hash = crypto
+    .createHash('md5')
+    .update(finalString)
+    .digest('hex');
+
+  console.log('🔐 MD5 hash (IPN):', hash);
 
   return hash;
 }
