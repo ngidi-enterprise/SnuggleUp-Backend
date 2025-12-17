@@ -301,13 +301,13 @@ router.post('/test-signature', async (req, res) => {
 
 // Handle PayFast success redirect
 router.get('/success', (req, res) => {
-  const frontendUrl = process.env.FRONTEND_URL || 'https://vitejsviteeadmfezy-esxh--5173--cf284e50.local-credentialless.webcontainer.io';
+  const frontendUrl = process.env.FRONTEND_URL || 'https://snuggleup.co.za';
   res.redirect(`${frontendUrl}/checkout/success`);
 });
 
 // Handle PayFast cancel redirect
 router.get('/cancel', (req, res) => {
-  const frontendUrl = process.env.FRONTEND_URL || 'https://vitejsviteeadmfezy-esxh--5173--cf284e50.local-credentialless.webcontainer.io';
+  const frontendUrl = process.env.FRONTEND_URL || 'https://snuggleup.co.za';
   res.redirect(`${frontendUrl}/checkout/cancel`);
 });
 
