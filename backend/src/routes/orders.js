@@ -233,19 +233,24 @@ export const buildCJOrderData = (order) => {
     return digitsOnly.slice(-11);
   };
 
-  // Helper: Sanitize postal code for CJ (13 digits without special chars)
+  // Helper: Sanitize postal code for CJ
+  // CJ expects a consignee ID which is typically 13 digits in China,
+  // but for international addresses (like SA 4-digit codes), we can use a padded format
   const sanitizePostalCode = (postalCode) => {
-    if (!postalCode) return '1234567890123'; // Default 13-digit fallback
+    if (!postalCode) return '0000000000000'; // Default: 13 zeros
     
-    // Remove all special characters, keep only alphanumeric
+    // Remove all non-alphanumeric characters
     const cleaned = String(postalCode).replace(/[^a-zA-Z0-9]/g, '');
     
-    // Pad to exactly 13 characters if needed
-    if (cleaned.length === 0) return '1234567890123';
+    if (cleaned.length === 0) return '0000000000000';
+    
+    // If already 13+ chars, truncate to 13
     if (cleaned.length >= 13) return cleaned.substring(0, 13);
     
-    // Pad with zeros on the right to reach 13 digits
-    return (cleaned + '0000000000000').substring(0, 13);
+    // For SA postal codes (4 digits), pad with leading zeros to reach 13 digits
+    // This preserves the postal code and fills the rest with zeros
+    // Example: "2196" → "0000000002196"
+    return ('0000000000000' + cleaned).slice(-13);
   };
 
   // Extract shipping info from order
