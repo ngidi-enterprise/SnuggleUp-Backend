@@ -300,10 +300,40 @@ router.post('/test-signature', async (req, res) => {
 });
 
 // Handle PayFast success redirect
-router.get('/success', (req, res) => {
+router.get('/success', async (req, res) => {
   const frontendUrl = process.env.FRONTEND_URL || 'https://snuggleup.co.za';
-  const qs = new URLSearchParams(req.query || {}).toString();
-  const target = `${frontendUrl}/#/checkout/success${qs ? `?${qs}` : ''}`;
+  
+  // PayFast doesn't send params to return_url, so we get the most recent order for this session
+  // The user just completed payment, so fetch their latest pending/paid order
+  try {
+    const { default: pool } = await import('../db.js');
+    
+    // Get the most recent order (within last 10 minutes to avoid stale orders)
+    const result = await pool.query(`
+      SELECT order_number, customer_email, payfast_payment_id
+      FROM orders 
+      WHERE created_at > NOW() - INTERVAL '10 minutes'
+        AND status IN ('pending', 'paid')
+      ORDER BY created_at DESC 
+      LIMIT 1
+    `);
+    
+    if (result.rows.length > 0) {
+      const order = result.rows[0];
+      const params = new URLSearchParams({
+        m_payment_id: order.order_number,
+        pf_payment_id: order.payfast_payment_id || 'processing'
+      });
+      const target = `${frontendUrl}/#/checkout/success?${params.toString()}`;
+      console.log('✅ Success redirect with order:', order.order_number);
+      return res.redirect(target);
+    }
+  } catch (error) {
+    console.error('Failed to lookup order for success redirect:', error);
+  }
+  
+  // Fallback: redirect without params (will show N/A)
+  const target = `${frontendUrl}/#/checkout/success`;
   res.redirect(target);
 });
 
