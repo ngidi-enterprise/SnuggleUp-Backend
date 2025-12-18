@@ -280,7 +280,10 @@ export const buildCJOrderData = (order) => {
   console.log(`  Postal Code: "${shippingInfo.postalCode}" → "${sanitizedPostalCode}"`);
   console.log(`  Full shipping info:`, JSON.stringify(shippingInfo, null, 2));
 
-  return {
+  // Build order data
+  // Note: shippingZip is OMITTED for ZA orders because CJ interprets it as SA ID number (13 digits)
+  // which we don't collect. The postal code is already included in shippingAddress.
+  const orderData = {
     orderNumber: order.order_number,
     shippingCountryCode: order.shipping_country || 'ZA',
     shippingCountry: 'South Africa',
@@ -289,7 +292,7 @@ export const buildCJOrderData = (order) => {
     shippingCustomerName: shippingInfo.customerName,
     shippingAddress: shippingInfo.address,
     shippingPhone: sanitizedPhone,
-    shippingZip: sanitizedPostalCode,
+    // shippingZip: OMITTED - CJ requires SA ID number here for ZA, not postal code
     email: order.customer_email,
     logisticName: order.shipping_method || 'USPS+',
     fromCountryCode: 'CN',
@@ -302,5 +305,7 @@ export const buildCJOrderData = (order) => {
       })),
     remark: `SnuggleUp Order ${order.order_number}`
   };
+  
+  return orderData;
 };
 
