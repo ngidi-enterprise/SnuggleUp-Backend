@@ -205,31 +205,43 @@ export const updateOrderTracking = async (cjOrderId, trackingNumber, trackingUrl
 // Helper: Build CJ order data from local order
 export const buildCJOrderData = (order) => {
   // Helper: Sanitize and validate phone for CJ
-  // CJ requires shippingPhone to be EXACTLY 13 digits (pad with leading zeros if needed)
+  // CJ requires phone to be 9 digits OR 11 digits starting with 27 (NOT 13 digits!)
   const sanitizePhone = (phone) => {
-    if (!phone) return '2782123456789'; // Default fallback: 13 digits
+    if (!phone) return '27821234567'; // Default fallback: 11 digits starting with 27
     
     // Remove all non-digits
     let digitsOnly = String(phone).replace(/\D/g, '');
     
     // If less than 9 digits, use default
-    if (digitsOnly.length < 9) return '2782123456789';
+    if (digitsOnly.length < 9) return '27821234567';
     
-    // If 10 digits and starts with 0 (SA format), convert to 27 format (becomes 11 digits)
+    // If 10 digits and starts with 0 (SA format), convert to 27 format
     if (digitsOnly.length === 10 && digitsOnly.startsWith('0')) {
-      digitsOnly = '27' + digitsOnly.substring(1);
+      return '27' + digitsOnly.substring(1); // Results in 11 digits
     }
     
-    // If 11 digits starting with 0, convert to 27 format (becomes 11 digits)
+    // If 11 digits starting with 0, convert to 27 format
     if (digitsOnly.length === 11 && digitsOnly.startsWith('0')) {
-      digitsOnly = '27' + digitsOnly.substring(1);
+      return '27' + digitsOnly.substring(1); // Results in 11 digits
     }
     
-    // Pad with leading zeros to exactly 13 digits (CJ requirement)
-    // Example: "27817359605" (11 digits) → "0027817359605" (13 digits)
-    const padded = ('0000000000000' + digitsOnly).slice(-13);
+    // If already 11 digits starting with 27, use as is
+    if (digitsOnly.length === 11 && digitsOnly.startsWith('27')) {
+      return digitsOnly;
+    }
     
-    return padded;
+    // If 9 digits, use as is
+    if (digitsOnly.length === 9) {
+      return digitsOnly;
+    }
+    
+    // Otherwise, if too long, take last 11 digits (safer than padding)
+    if (digitsOnly.length > 11) {
+      return digitsOnly.slice(-11);
+    }
+    
+    // Fallback
+    return '27821234567';
   };
 
   // Helper: Sanitize postal code for CJ
