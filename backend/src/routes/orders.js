@@ -234,9 +234,20 @@ export const buildCJOrderData = (order) => {
   };
 
   // Helper: Sanitize postal code for CJ
-  // Keep it simple: just use the postal code as-is (test order works this way)
+  // CJ requires consignee ID to be EXACTLY 13 digits (no special characters)
   const sanitizePostalCode = (postalCode) => {
-    return postalCode || '2196'; // Default SA postal code
+    if (!postalCode) return '1234567890123'; // Default 13 digits
+    
+    // Remove all non-digits, keep only numeric
+    const digitsOnly = String(postalCode).replace(/\D/g, '');
+    
+    if (digitsOnly.length === 0) return '1234567890123';
+    
+    // Pad with leading zeros to exactly 13 digits
+    // Example: "2196" → "0000000002196"
+    const padded = ('0000000000000' + digitsOnly).slice(-13);
+    
+    return padded;
   };
 
   // Extract shipping info from order
