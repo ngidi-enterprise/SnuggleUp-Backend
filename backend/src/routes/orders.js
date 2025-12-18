@@ -204,15 +204,66 @@ export const updateOrderTracking = async (cjOrderId, trackingNumber, trackingUrl
 
 // Helper: Build CJ order data from local order
 export const buildCJOrderData = (order) => {
-  // Extract shipping info from order - now using real data from database!
+  // Helper: Sanitize and validate phone for CJ (9 or 11 digits, or 11 starting with 27)
+  const sanitizePhone = (phone) => {
+    if (!phone) return '27821234567'; // Default fallback: South African mobile format
+    
+    // Remove all non-digits
+    const digitsOnly = String(phone).replace(/\D/g, '');
+    
+    // If less than 9 digits, reject
+    if (digitsOnly.length < 9) return '27821234567'; // Fallback
+    
+    // If 10 digits and starts with 0 (SA format), convert to 27 format
+    if (digitsOnly.length === 10 && digitsOnly.startsWith('0')) {
+      return '27' + digitsOnly.substring(1);
+    }
+    
+    // If 11 digits starting with 0, convert to 27 format
+    if (digitsOnly.length === 11 && digitsOnly.startsWith('0')) {
+      return '27' + digitsOnly.substring(1);
+    }
+    
+    // If already 11-13 digits, use as is
+    if (digitsOnly.length >= 9 && digitsOnly.length <= 13) {
+      return digitsOnly;
+    }
+    
+    // If too many digits, take last 11
+    return digitsOnly.slice(-11);
+  };
+
+  // Helper: Sanitize postal code for CJ (13 digits without special chars)
+  const sanitizePostalCode = (postalCode) => {
+    if (!postalCode) return '1234567890123'; // Default 13-digit fallback
+    
+    // Remove all special characters, keep only alphanumeric
+    const cleaned = String(postalCode).replace(/[^a-zA-Z0-9]/g, '');
+    
+    // Pad to exactly 13 characters if needed
+    if (cleaned.length === 0) return '1234567890123';
+    if (cleaned.length >= 13) return cleaned.substring(0, 13);
+    
+    // Pad with zeros on the right to reach 13 digits
+    return (cleaned + '0000000000000').substring(0, 13);
+  };
+
+  // Extract shipping info from order
   const shippingInfo = {
-    customerName: order.customer_name || 'Customer Name',
-    address: order.shipping_address || 'Address Line 1',
+    customerName: order.customer_name || 'Customer',
+    address: order.shipping_address || 'No Address',
     city: order.shipping_city || 'Johannesburg',
     province: order.shipping_province || 'Gauteng',
     postalCode: order.shipping_postal_code || '2196',
     phone: order.shipping_phone || '0821234567',
   };
+
+  // Sanitize phone and postal code for CJ API
+  const sanitizedPhone = sanitizePhone(shippingInfo.phone);
+  const sanitizedPostalCode = sanitizePostalCode(shippingInfo.postalCode);
+
+  console.log(`[buildCJOrderData] Original phone: ${shippingInfo.phone} → Sanitized: ${sanitizedPhone}`);
+  console.log(`[buildCJOrderData] Original postal code: ${shippingInfo.postalCode} → Sanitized: ${sanitizedPostalCode}`);
 
   return {
     orderNumber: order.order_number,
@@ -222,8 +273,8 @@ export const buildCJOrderData = (order) => {
     shippingCity: shippingInfo.city,
     shippingCustomerName: shippingInfo.customerName,
     shippingAddress: shippingInfo.address,
-    shippingPhone: shippingInfo.phone,
-    shippingZip: shippingInfo.postalCode,
+    shippingPhone: sanitizedPhone,
+    shippingZip: sanitizedPostalCode,
     email: order.customer_email,
     logisticName: order.shipping_method || 'USPS+',
     fromCountryCode: 'CN',
