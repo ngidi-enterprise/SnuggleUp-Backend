@@ -264,8 +264,10 @@ export const buildCJOrderData = (order) => {
   const sanitizedPhone = sanitizePhone(shippingInfo.phone);
   const sanitizedPostalCode = sanitizePostalCode(shippingInfo.postalCode);
 
-  console.log(`[buildCJOrderData] Original phone: ${shippingInfo.phone} → Sanitized: ${sanitizedPhone}`);
-  console.log(`[buildCJOrderData] Original postal code: ${shippingInfo.postalCode} → Sanitized: ${sanitizedPostalCode}`);
+  console.log(`[buildCJOrderData] Order #${order.order_number}:`);
+  console.log(`  Phone: "${shippingInfo.phone}" → "${sanitizedPhone}"`);
+  console.log(`  Postal Code: "${shippingInfo.postalCode}" → "${sanitizedPostalCode}"`);
+  console.log(`  Full shipping info:`, JSON.stringify(shippingInfo, null, 2));
 
   return {
     orderNumber: order.order_number,
