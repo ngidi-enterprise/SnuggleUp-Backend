@@ -391,16 +391,18 @@ export const cjClient = {
       throw new Error('products array is required');
     }
 
+    // Log exact payload being sent
+    console.log(`[cjClient] Sending to CJ API:`);
+    console.log(`  shippingZip: "${orderData.shippingZip}" (type: ${typeof orderData.shippingZip}, length: ${orderData.shippingZip?.length})`);
+    console.log(`  shippingPhone: "${orderData.shippingPhone}" (type: ${typeof orderData.shippingPhone}, length: ${orderData.shippingPhone?.length})`);
+    console.log(`  logisticName: "${orderData.logisticName}"`);
+
     const json = await http('POST', url, {
       body: orderData,
       headers: { 'CJ-Access-Token': accessToken },
     });
 
-    // CJ may return result: false with a message, but still create the order and return orderId in data
-    // This happens with "Balance is insufficient" - the order exists in CJ but payment is flagged
-    const hasOrderId = json.data && json.data.orderId;
-    
-    if (!hasOrderId) {
+    if (!json.result || !json.data) {
       throw new Error('CJ createOrder failed: ' + (json.message || 'Unknown error'));
     }
 
@@ -413,7 +415,6 @@ export const cjClient = {
       postageAmount: json.data.postageAmount,
       orderStatus: json.data.orderStatus,
       productInfoList: json.data.productInfoList,
-      cjMessage: json.message, // Capture any warning/error message from CJ
     };
   },
 
