@@ -204,33 +204,32 @@ export const updateOrderTracking = async (cjOrderId, trackingNumber, trackingUrl
 
 // Helper: Build CJ order data from local order
 export const buildCJOrderData = (order) => {
-  // Helper: Sanitize and validate phone for CJ (9 or 11 digits, or 11 starting with 27)
+  // Helper: Sanitize and validate phone for CJ
+  // CJ requires shippingPhone to be EXACTLY 13 digits (pad with leading zeros if needed)
   const sanitizePhone = (phone) => {
-    if (!phone) return '27821234567'; // Default fallback: South African mobile format
+    if (!phone) return '2782123456789'; // Default fallback: 13 digits
     
     // Remove all non-digits
-    const digitsOnly = String(phone).replace(/\D/g, '');
+    let digitsOnly = String(phone).replace(/\D/g, '');
     
-    // If less than 9 digits, reject
-    if (digitsOnly.length < 9) return '27821234567'; // Fallback
+    // If less than 9 digits, use default
+    if (digitsOnly.length < 9) return '2782123456789';
     
-    // If 10 digits and starts with 0 (SA format), convert to 27 format
+    // If 10 digits and starts with 0 (SA format), convert to 27 format (becomes 11 digits)
     if (digitsOnly.length === 10 && digitsOnly.startsWith('0')) {
-      return '27' + digitsOnly.substring(1);
+      digitsOnly = '27' + digitsOnly.substring(1);
     }
     
-    // If 11 digits starting with 0, convert to 27 format
+    // If 11 digits starting with 0, convert to 27 format (becomes 11 digits)
     if (digitsOnly.length === 11 && digitsOnly.startsWith('0')) {
-      return '27' + digitsOnly.substring(1);
+      digitsOnly = '27' + digitsOnly.substring(1);
     }
     
-    // If already 11-13 digits, use as is
-    if (digitsOnly.length >= 9 && digitsOnly.length <= 13) {
-      return digitsOnly;
-    }
+    // Pad with leading zeros to exactly 13 digits (CJ requirement)
+    // Example: "27817359605" (11 digits) → "0027817359605" (13 digits)
+    const padded = ('0000000000000' + digitsOnly).slice(-13);
     
-    // If too many digits, take last 11
-    return digitsOnly.slice(-11);
+    return padded;
   };
 
   // Helper: Sanitize postal code for CJ
