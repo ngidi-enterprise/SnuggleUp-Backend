@@ -215,21 +215,60 @@ export const buildCJOrderData = (order) => {
     phone: order.shipping_phone || '0821234567',
   };
 
-  const rawConsigneeId = order.shipping_id_number || shippingInfo.phone || '';
+  // ========== CONSIGNEE ID VALIDATION ==========
+  // CJ requires: exactly 13 digits, no special characters
+  const rawConsigneeId = order.shipping_id_number || '';
   const consigneeDigits = (rawConsigneeId.match(/\d/g) || []).join('');
-  const consigneeId = (consigneeDigits && consigneeDigits.length >= 13)
-    ? consigneeDigits.slice(0, 13)
-    : (consigneeDigits.padEnd(13, '0') || '0000000000000');
+  
+  let consigneeId;
+  if (consigneeDigits && consigneeDigits.length >= 13) {
+    // Truncate to 13 if longer
+    consigneeId = consigneeDigits.slice(0, 13);
+  } else if (consigneeDigits && consigneeDigits.length > 0) {
+    // Pad with zeros if shorter than 13
+    consigneeId = consigneeDigits.padEnd(13, '0');
+  } else {
+    // Fallback: all zeros (will likely fail, but at least 13 digits)
+    consigneeId = '0000000000000';
+  }
 
-  const cleanPhone = (shippingInfo.phone.match(/\d/g) || []).join('');
-  const cjPhone = cleanPhone && cleanPhone.length >= 7 ? cleanPhone : '0000000000';
+  // ========== PHONE VALIDATION ==========
+  // CJ requires: 9 digits OR 11 digits starting with 27
+  // SA numbers are typically 0821234567 (10 digits)
+  // Need to convert to either:
+  //   - 9 digits (remove leading 0): 821234567
+  //   - 11 digits (add 27 prefix): 27821234567
+  const rawPhone = shippingInfo.phone || '';
+  const phoneDigits = (rawPhone.match(/\d/g) || []).join('');
+  
+  let cjPhone;
+  if (phoneDigits.length === 10 && phoneDigits.startsWith('0')) {
+    // Standard SA format: 0821234567 -> remove leading 0 -> 821234567 (9 digits)
+    cjPhone = phoneDigits.slice(1);
+  } else if (phoneDigits.length === 10) {
+    // 10 digits not starting with 0 -> add 27 -> 27xxxxxxxxx (11 digits)
+    cjPhone = '27' + phoneDigits;
+  } else if (phoneDigits.length === 11 && phoneDigits.startsWith('27')) {
+    // Already in intl format: 27821234567 (11 digits)
+    cjPhone = phoneDigits;
+  } else if (phoneDigits.length === 9) {
+    // Already 9 digits
+    cjPhone = phoneDigits;
+  } else {
+    // Fallback: use whatever digits we have, or a placeholder
+    cjPhone = phoneDigits.length > 0 ? phoneDigits : '0000000000';
+  }
 
   console.log(`[buildCJOrderData] Order #${order.order_number}:`);
+  console.log(`  === CONSIGNEE ID ===`);
   console.log(`  Raw shipping_id_number from DB: "${order.shipping_id_number}"`);
-  console.log(`  Raw phone from DB: "${order.shipping_phone}"`);
-  console.log(`  rawConsigneeId (id_number OR phone): "${rawConsigneeId}"`);
-  console.log(`  consigneeDigits extracted: "${consigneeDigits}" (length: ${consigneeDigits.length})`);
+  console.log(`  Extracted digits: "${consigneeDigits}" (length: ${consigneeDigits.length})`);
   console.log(`  Final consigneeId (13-digit): "${consigneeId}"`);
+  console.log(`  === PHONE ===`);
+  console.log(`  Raw phone from DB: "${order.shipping_phone}"`);
+  console.log(`  Extracted digits: "${phoneDigits}" (length: ${phoneDigits.length})`);
+  console.log(`  Final CJ phone (9 or 11 digit): "${cjPhone}"`);
+  console.log(`  === SHIPPING INFO ===`);
   console.log(`  Full shipping info:`, JSON.stringify(shippingInfo, null, 2));
 
   return {
