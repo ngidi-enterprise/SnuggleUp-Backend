@@ -75,6 +75,7 @@ async function initDb() {
       insurance_selected BOOLEAN DEFAULT FALSE,
       insurance_cost REAL DEFAULT 0,
       insurance_coverage REAL DEFAULT 0,
+      shipping_id_number TEXT,
       created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
       updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     );
@@ -89,6 +90,7 @@ async function initDb() {
   await pool.query(`ALTER TABLE orders ADD COLUMN IF NOT EXISTS insurance_selected BOOLEAN DEFAULT FALSE;`);
   await pool.query(`ALTER TABLE orders ADD COLUMN IF NOT EXISTS insurance_cost REAL DEFAULT 0;`);
   await pool.query(`ALTER TABLE orders ADD COLUMN IF NOT EXISTS insurance_coverage REAL DEFAULT 0;`);
+  await pool.query(`ALTER TABLE orders ADD COLUMN IF NOT EXISTS shipping_id_number TEXT;`);
   
   // CJ Dropshipping order tracking columns
   await pool.query(`ALTER TABLE orders ADD COLUMN IF NOT EXISTS cj_order_id TEXT;`);
