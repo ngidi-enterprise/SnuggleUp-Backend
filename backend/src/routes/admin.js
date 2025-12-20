@@ -1116,9 +1116,6 @@ router.post('/orders/:orderId/submit-to-cj', async (req, res) => {
     });
   }
 });
-    });
-  }
-});
 
 // Get all orders for admin dashboard
 router.get('/orders', async (req, res) => {
