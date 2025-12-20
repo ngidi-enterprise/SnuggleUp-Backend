@@ -213,13 +213,12 @@ router.get('/analytics', async (req, res) => {
           COALESCE(SUM(
             CASE 
               WHEN cp.id IS NOT NULL THEN (COALESCE(cp.custom_price, oi.sale_price, 0) - (COALESCE(cp.cj_cost_price, 0) * $1)) * oi.qty
-              WHEN $2 > 1 THEN (oi.sale_price - (oi.sale_price / $2)) * oi.qty -- fallback: derive cost from flat markup factor
+              WHEN ($2::numeric) > 1 THEN (oi.sale_price - (oi.sale_price / ($2::numeric))) * oi.qty -- fallback: derive cost from flat markup factor
               ELSE 0
             END
           ), 0) AS actual_revenue
         FROM order_items oi
         LEFT JOIN curated_products cp ON cp.id::text = oi.numeric_id_str
-        WHERE oi.numeric_id_str ~ '^[0-9]+$'
       `,
       [USD_TO_ZAR, PRICE_MARKUP]
     );
