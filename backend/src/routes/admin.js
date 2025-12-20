@@ -189,6 +189,7 @@ router.get('/analytics', async (req, res) => {
         COUNT(*) as total_orders,
         SUM(total) as total_revenue,
         SUM(CASE WHEN status = 'completed' THEN 1 ELSE 0 END) as completed_orders,
+        SUM(CASE WHEN status = 'completed' THEN total ELSE 0 END) as completed_revenue,
         SUM(CASE WHEN status = 'pending' THEN 1 ELSE 0 END) as pending_orders
       FROM orders
     `);
