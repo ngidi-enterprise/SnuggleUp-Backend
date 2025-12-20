@@ -195,7 +195,7 @@ router.get('/analytics', async (req, res) => {
     `);
 
     // Profit-based actual revenue for CJ-submitted orders
-    const profitResult = await pool.query(
+    const profitCJResult = await pool.query(
       `
         WITH cj_orders AS (
           SELECT id, items
@@ -217,6 +217,35 @@ router.get('/analytics', async (req, res) => {
               ELSE 0
             END
           ), 0) AS actual_revenue
+        FROM order_items oi
+        LEFT JOIN curated_products cp ON cp.id::text = oi.numeric_id_str
+      `,
+      [USD_TO_ZAR, PRICE_MARKUP]
+    );
+
+    // Profit-based actual revenue for all paid/completed orders
+    const profitAllResult = await pool.query(
+      `
+        WITH paid_orders AS (
+          SELECT id, items
+          FROM orders
+          WHERE status IN ('paid','completed')
+        ),
+        order_items AS (
+          SELECT 
+            regexp_replace(item->>'id', '\\D', '', 'g') AS numeric_id_str,
+            COALESCE((item->>'quantity')::numeric, 0) AS qty,
+            COALESCE((item->>'price')::numeric, 0) AS sale_price
+          FROM paid_orders, LATERAL jsonb_array_elements(items::jsonb) AS item
+        )
+        SELECT 
+          COALESCE(SUM(
+            CASE 
+              WHEN cp.id IS NOT NULL THEN (oi.sale_price - (COALESCE(cp.cj_cost_price, 0) * $1)) * oi.qty
+              WHEN ($2::numeric) > 1 THEN (oi.sale_price - (oi.sale_price / ($2::numeric))) * oi.qty
+              ELSE 0
+            END
+          ), 0) AS actual_revenue_all
         FROM order_items oi
         LEFT JOIN curated_products cp ON cp.id::text = oi.numeric_id_str
       `,
@@ -252,7 +281,8 @@ router.get('/analytics', async (req, res) => {
     res.json({
       summary: {
         ...ordersResult.rows[0],
-        actual_revenue: profitResult.rows[0]?.actual_revenue || 0
+        actual_revenue: profitAllResult.rows[0]?.actual_revenue_all || 0,
+        actual_revenue_cj: profitCJResult.rows[0]?.actual_revenue || 0
       },
       dailyOrders: dailyOrdersResult.rows,
       topProducts: topProductsResult.rows,
