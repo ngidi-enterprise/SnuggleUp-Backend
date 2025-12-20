@@ -42,6 +42,8 @@ router.post('/create', optionalAuth, async (req, res) => {
       insurance: insurance?.selected ? `R${insurance.cost}` : 'None'
     });
     
+    console.log('📋 Shipping details received from frontend:', JSON.stringify(shippingDetails, null, 2));
+    
     // Validate PayFast configuration
     const testMode = process.env.PAYFAST_TEST_MODE === 'true';
     const merchantId = process.env.PAYFAST_MERCHANT_ID;
