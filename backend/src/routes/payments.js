@@ -7,6 +7,20 @@ import { sendOrderConfirmationEmail } from '../services/emailService.js';
 
 export const router = express.Router();
 
+// Validate South African ID (13 digits + checksum)
+const isValidSouthAfricanId = (value = '') => {
+  const digits = String(value).replace(/\D/g, '');
+  if (digits.length !== 13) return false;
+  const nums = digits.split('').map(Number);
+  const sumOdd = nums.slice(0, 12).filter((_, idx) => idx % 2 === 0).reduce((a, b) => a + b, 0);
+  const evenStr = nums.slice(0, 12).filter((_, idx) => idx % 2 === 1).join('');
+  const doubled = String(Number(evenStr || '0') * 2);
+  const sumEven = doubled.split('').reduce((a, b) => a + Number(b), 0);
+  const total = sumOdd + sumEven;
+  const checkDigit = (10 - (total % 10)) % 10;
+  return checkDigit === nums[12];
+};
+
 // Optional auth middleware - passes through if no token, but validates if present
 const optionalAuth = (req, res, next) => {
   const authHeader = req.headers['authorization'];
@@ -43,6 +57,14 @@ router.post('/create', optionalAuth, async (req, res) => {
     });
     
     console.log('📋 Shipping details received from frontend:', JSON.stringify(shippingDetails, null, 2));
+
+    // Validate SA ID before creating order/payment
+    const idDigits = (shippingDetails?.idNumber || '').replace(/\D/g, '');
+    if (!isValidSouthAfricanId(idDigits)) {
+      return res.status(400).json({
+        error: 'Invalid South African ID number (must be 13 digits with valid checksum)'
+      });
+    }
     
     // Validate PayFast configuration
     const testMode = process.env.PAYFAST_TEST_MODE === 'true';
