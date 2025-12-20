@@ -396,6 +396,10 @@ export const cjClient = {
     console.log(`  shippingZip: "${orderData.shippingZip}" (type: ${typeof orderData.shippingZip}, length: ${orderData.shippingZip?.length})`);
     console.log(`  shippingPhone: "${orderData.shippingPhone}" (type: ${typeof orderData.shippingPhone}, length: ${orderData.shippingPhone?.length})`);
     console.log(`  logisticName: "${orderData.logisticName}"`);
+    console.log(`  consigneeIdNum: "${orderData.consigneeIdNum}" (length: ${orderData.consigneeIdNum?.length})`);
+    if (orderData.consigneeTaxNumber !== undefined) {
+      console.log(`  consigneeTaxNumber: "${orderData.consigneeTaxNumber}" (length: ${orderData.consigneeTaxNumber?.length})`);
+    }
 
     const json = await http('POST', url, {
       body: orderData,
