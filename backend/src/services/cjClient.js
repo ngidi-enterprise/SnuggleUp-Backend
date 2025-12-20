@@ -402,7 +402,20 @@ export const cjClient = {
       headers: { 'CJ-Access-Token': accessToken },
     });
 
-    if (!json.result || !json.data) {
+    // CJ may return HTTP 200 with result=false and message explaining the issue
+    // Sometimes the order is still created despite the error (e.g., "Balance is insufficient")
+    // So we log the warning but continue if we got data back
+    if (!json.result) {
+      console.warn(`[cjClient] CJ API warning: ${json.message || 'Unknown warning'}`);
+      // If we have order data despite the error, still return it
+      if (!json.data) {
+        throw new Error('CJ createOrder failed: ' + (json.message || 'Unknown error'));
+      }
+      // If we have data, log it as a partial success
+      console.log(`[cjClient] Despite warning, order was created. Data:`, JSON.stringify(json.data, null, 2));
+    }
+
+    if (!json.data) {
       throw new Error('CJ createOrder failed: ' + (json.message || 'Unknown error'));
     }
 
@@ -415,6 +428,7 @@ export const cjClient = {
       postageAmount: json.data.postageAmount,
       orderStatus: json.data.orderStatus,
       productInfoList: json.data.productInfoList,
+      warning: json.result === false ? json.message : null, // Pass back any warning message
     };
   },
 
