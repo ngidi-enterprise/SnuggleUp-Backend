@@ -97,9 +97,9 @@ export const createOrder = async (userId, orderData) => {
         user_id, order_number, items, subtotal, shipping, discount, total, customer_email, 
         shipping_country, shipping_method, insurance_selected, insurance_cost, insurance_coverage, 
         customer_name, shipping_address, shipping_city, shipping_province, shipping_postal_code, shipping_phone,
-        status
+        shipping_id_number, status
       )
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20) RETURNING id`,
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21) RETURNING id`,
       [
         safeUserId,
         orderNumber,
@@ -120,6 +120,7 @@ export const createOrder = async (userId, orderData) => {
         shippingDetails?.province || null,
         shippingDetails?.postalCode || null,
         shippingDetails?.phone || null,
+        shippingDetails?.idNumber || null,
         'pending'
       ]
     );
@@ -204,63 +205,6 @@ export const updateOrderTracking = async (cjOrderId, trackingNumber, trackingUrl
 
 // Helper: Build CJ order data from local order
 export const buildCJOrderData = (order) => {
-  // Helper: Sanitize and validate phone for CJ
-  // CJ requires phone to be 9 digits OR 11 digits starting with 27 (NOT 13 digits!)
-  const sanitizePhone = (phone) => {
-    if (!phone) return '27821234567'; // Default fallback: 11 digits starting with 27
-    
-    // Remove all non-digits
-    let digitsOnly = String(phone).replace(/\D/g, '');
-    
-    // If less than 9 digits, use default
-    if (digitsOnly.length < 9) return '27821234567';
-    
-    // If 10 digits and starts with 0 (SA format), convert to 27 format
-    if (digitsOnly.length === 10 && digitsOnly.startsWith('0')) {
-      return '27' + digitsOnly.substring(1); // Results in 11 digits
-    }
-    
-    // If 11 digits starting with 0, convert to 27 format
-    if (digitsOnly.length === 11 && digitsOnly.startsWith('0')) {
-      return '27' + digitsOnly.substring(1); // Results in 11 digits
-    }
-    
-    // If already 11 digits starting with 27, use as is
-    if (digitsOnly.length === 11 && digitsOnly.startsWith('27')) {
-      return digitsOnly;
-    }
-    
-    // If 9 digits, use as is
-    if (digitsOnly.length === 9) {
-      return digitsOnly;
-    }
-    
-    // Otherwise, if too long, take last 11 digits (safer than padding)
-    if (digitsOnly.length > 11) {
-      return digitsOnly.slice(-11);
-    }
-    
-    // Fallback
-    return '27821234567';
-  };
-
-  // Helper: Sanitize postal code for CJ
-  // CJ requires consignee ID to be EXACTLY 13 digits (no special characters)
-  const sanitizePostalCode = (postalCode) => {
-    if (!postalCode) return '1234567890123'; // Default 13 digits
-    
-    // Remove all non-digits, keep only numeric
-    const digitsOnly = String(postalCode).replace(/\D/g, '');
-    
-    if (digitsOnly.length === 0) return '1234567890123';
-    
-    // Pad with leading zeros to exactly 13 digits
-    // Example: "2196" → "0000000002196"
-    const padded = ('0000000000000' + digitsOnly).slice(-13);
-    
-    return padded;
-  };
-
   // Extract shipping info from order
   const shippingInfo = {
     customerName: order.customer_name || 'Customer',
@@ -271,19 +215,24 @@ export const buildCJOrderData = (order) => {
     phone: order.shipping_phone || '0821234567',
   };
 
-  // Sanitize phone and postal code for CJ API
-  const sanitizedPhone = sanitizePhone(shippingInfo.phone);
-  const sanitizedPostalCode = sanitizePostalCode(shippingInfo.postalCode);
+  const rawConsigneeId = order.shipping_id_number || shippingInfo.phone || '';
+  const consigneeDigits = (rawConsigneeId.match(/\d/g) || []).join('');
+  const consigneeId = (consigneeDigits && consigneeDigits.length >= 13)
+    ? consigneeDigits.slice(0, 13)
+    : (consigneeDigits.padEnd(13, '0') || '0000000000000');
+
+  const cleanPhone = (shippingInfo.phone.match(/\d/g) || []).join('');
+  const cjPhone = cleanPhone && cleanPhone.length >= 7 ? cleanPhone : '0000000000';
 
   console.log(`[buildCJOrderData] Order #${order.order_number}:`);
-  console.log(`  Phone: "${shippingInfo.phone}" → "${sanitizedPhone}"`);
-  console.log(`  Postal Code: "${shippingInfo.postalCode}" → "${sanitizedPostalCode}"`);
+  console.log(`  Raw shipping_id_number from DB: "${order.shipping_id_number}"`);
+  console.log(`  Raw phone from DB: "${order.shipping_phone}"`);
+  console.log(`  rawConsigneeId (id_number OR phone): "${rawConsigneeId}"`);
+  console.log(`  consigneeDigits extracted: "${consigneeDigits}" (length: ${consigneeDigits.length})`);
+  console.log(`  Final consigneeId (13-digit): "${consigneeId}"`);
   console.log(`  Full shipping info:`, JSON.stringify(shippingInfo, null, 2));
 
-  // Build order data
-  // Note: shippingZip is OMITTED for ZA orders because CJ interprets it as SA ID number (13 digits)
-  // which we don't collect. The postal code is already included in shippingAddress.
-  const orderData = {
+  return {
     orderNumber: order.order_number,
     shippingCountryCode: order.shipping_country || 'ZA',
     shippingCountry: 'South Africa',
@@ -291,8 +240,10 @@ export const buildCJOrderData = (order) => {
     shippingCity: shippingInfo.city,
     shippingCustomerName: shippingInfo.customerName,
     shippingAddress: shippingInfo.address,
-    shippingPhone: sanitizedPhone,
-    // shippingZip: OMITTED - CJ requires SA ID number here for ZA, not postal code
+    shippingPhone: cjPhone,
+    shippingZip: shippingInfo.postalCode,
+    consigneeIdNum: consigneeId,
+    consigneeTaxNumber: consigneeId,
     email: order.customer_email,
     logisticName: order.shipping_method || 'USPS+',
     fromCountryCode: 'CN',
@@ -305,7 +256,5 @@ export const buildCJOrderData = (order) => {
       })),
     remark: `SnuggleUp Order ${order.order_number}`
   };
-  
-  return orderData;
 };
 
