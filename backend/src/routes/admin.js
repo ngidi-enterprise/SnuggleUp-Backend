@@ -1065,6 +1065,20 @@ router.delete('/products', async (req, res) => {
 
 // ============ CJ ORDER AUTOMATION ============
 
+// Validate South African ID (13 digits + checksum)
+const isValidSouthAfricanId = (value = '') => {
+  const digits = String(value).replace(/\D/g, '');
+  if (digits.length !== 13) return false;
+  const nums = digits.split('').map(Number);
+  const sumOdd = nums.slice(0, 12).filter((_, idx) => idx % 2 === 0).reduce((a, b) => a + b, 0);
+  const evenStr = nums.slice(0, 12).filter((_, idx) => idx % 2 === 1).join('');
+  const doubled = String(Number(evenStr || '0') * 2);
+  const sumEven = doubled.split('').reduce((a, b) => a + Number(b), 0);
+  const total = sumOdd + sumEven;
+  const checkDigit = (10 - (total % 10)) % 10;
+  return checkDigit === nums[12];
+};
+
 // Debug endpoint: Get full order details (including shipping_id_number)
 router.get('/orders/:orderId/debug', async (req, res) => {
   try {
@@ -1073,6 +1087,14 @@ router.get('/orders/:orderId/debug', async (req, res) => {
     
     if (!order) {
       return res.status(404).json({ error: 'Order not found' });
+    }
+
+    // Validate SA ID before sending to CJ
+    const idDigits = (order.shipping_id_number || '').replace(/\D/g, '');
+    if (!isValidSouthAfricanId(idDigits)) {
+      return res.status(400).json({
+        error: 'Invalid South African ID number (checksum failed). Please update the order with a valid ID before submitting to CJ.'
+      });
     }
     
     // Return full order with all fields for debugging
