@@ -189,10 +189,33 @@ router.get('/analytics', async (req, res) => {
         COUNT(*) as total_orders,
         SUM(total) as total_revenue,
         SUM(CASE WHEN status = 'completed' THEN 1 ELSE 0 END) as completed_orders,
-        SUM(CASE WHEN status = 'completed' THEN total ELSE 0 END) as completed_revenue,
+        SUM(CASE WHEN cj_order_id IS NOT NULL THEN total ELSE 0 END) as completed_revenue,
         SUM(CASE WHEN status = 'pending' THEN 1 ELSE 0 END) as pending_orders
       FROM orders
     `);
+
+    // Profit-based actual revenue for CJ-submitted orders
+    const profitResult = await pool.query(
+      `
+        WITH cj_orders AS (
+          SELECT id, items
+          FROM orders
+          WHERE cj_order_id IS NOT NULL
+        ),
+        order_items AS (
+          SELECT 
+            (item->>'id')::int AS product_id,
+            COALESCE((item->>'quantity')::numeric, 0) AS qty,
+            COALESCE((item->>'price')::numeric, 0) AS sale_price
+          FROM cj_orders, LATERAL jsonb_array_elements(items::jsonb) AS item
+        )
+        SELECT 
+          COALESCE(SUM((COALESCE(cp.custom_price, oi.sale_price, 0) - (COALESCE(cp.cj_cost_price, 0) * $1)) * oi.qty), 0) AS actual_revenue
+        FROM order_items oi
+        JOIN curated_products cp ON cp.id = oi.product_id
+      `,
+      [USD_TO_ZAR]
+    );
 
     // Orders by day (last 30 days)
     const dailyOrdersResult = await pool.query(`
@@ -221,7 +244,10 @@ router.get('/analytics', async (req, res) => {
     `);
 
     res.json({
-      summary: ordersResult.rows[0],
+      summary: {
+        ...ordersResult.rows[0],
+        actual_revenue: profitResult.rows[0]?.actual_revenue || 0
+      },
       dailyOrders: dailyOrdersResult.rows,
       topProducts: topProductsResult.rows,
     });
