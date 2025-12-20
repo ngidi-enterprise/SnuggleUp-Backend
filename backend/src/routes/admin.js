@@ -1065,6 +1065,40 @@ router.delete('/products', async (req, res) => {
 
 // ============ CJ ORDER AUTOMATION ============
 
+// Debug endpoint: Get full order details (including shipping_id_number)
+router.get('/orders/:orderId/debug', async (req, res) => {
+  try {
+    const { orderId } = req.params;
+    const order = await getOrderById(orderId);
+    
+    if (!order) {
+      return res.status(404).json({ error: 'Order not found' });
+    }
+    
+    // Return full order with all fields for debugging
+    res.json({
+      success: true,
+      orderId: order.id,
+      orderNumber: order.order_number,
+      status: order.status,
+      customer_name: order.customer_name,
+      customer_email: order.customer_email,
+      shipping_phone: order.shipping_phone,
+      shipping_id_number: order.shipping_id_number,
+      shipping_address: order.shipping_address,
+      shipping_city: order.shipping_city,
+      shipping_province: order.shipping_province,
+      shipping_postal_code: order.shipping_postal_code,
+      shipping_country: order.shipping_country,
+      items: order.items,
+      total: order.total
+    });
+  } catch (error) {
+    console.error('[admin] Order debug error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
 // Submit paid order to CJ Dropshipping
 router.post('/orders/:orderId/submit-to-cj', async (req, res) => {
   try {
