@@ -957,3 +957,512 @@ router.post('/products/bulk-deactivate', async (req, res) => {
   } catch (error) {
     await client.query('ROLLBACK');
     console.error('Bulk deactivate products error:', error);
+    res.status(500).json({ error: 'Failed to deactivate products' });
+  } finally {
+    client.release();
+  }
+});
+
+// Hard-delete ALL curated products and their inventory records (irreversible)
+// Requires explicit confirmation: DELETE /api/admin/products?confirm=wipe
+router.delete('/products', async (req, res) => {
+  const confirm = (req.query.confirm || req.body?.confirm || '').toString().toLowerCase();
+  if (confirm !== 'wipe') {
+    return res.status(400).json({
+      error: "Refused: add query `confirm=wipe` to proceed",
+      note: 'This deletes all curated products and related inventory records. Use bulk-deactivate for a reversible option.'
+    });
+  }
+
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+
+    // Delete inventory rows first to avoid FK issues in some schemas
+    const invDel = await client.query(`
+      DELETE FROM curated_product_inventories
+    `);
+
+    const prodDel = await client.query(`
+      DELETE FROM curated_products
+      RETURNING id
+    `);
+
+
+    await client.query('COMMIT');
+    res.json({ success: true, deletedInventories: invDel.rowCount, deletedProducts: prodDel.rowCount });
+  } catch (error) {
+    await client.query('ROLLBACK');
+    console.error('Bulk delete curated products error:', error);
+    res.status(500).json({ error: 'Failed to delete curated products' });
+  } finally {
+    client.release();
+  }
+});
+
+// ============ CJ ORDER AUTOMATION ============
+
+// Submit paid order to CJ Dropshipping
+router.post('/orders/:orderId/submit-to-cj', async (req, res) => {
+  try {
+    const { orderId } = req.params;
+
+    // 1. Fetch order from database
+    const order = await getOrderById(orderId);
+    
+    if (!order) {
+      return res.status(404).json({ error: 'Order not found' });
+    }
+
+    // 2. Validate order status
+    if (order.status !== 'paid') {
+      return res.status(400).json({ error: `Order status is ${order.status}, must be paid to submit to CJ` });
+    }
+
+    // 3. Check if already submitted
+    if (order.cj_order_id) {
+      return res.status(400).json({ 
+        error: 'Order already submitted to CJ',
+        cjOrderId: order.cj_order_id,
+        cjOrderNumber: order.cj_order_number
+      });
+    }
+
+    // 4. Build CJ order payload
+    const cjOrderData = buildCJOrderData(order);
+
+    // 5. Validate we have CJ products
+    if (!cjOrderData.products || cjOrderData.products.length === 0) {
+      return res.status(400).json({ 
+        error: 'No CJ products found in order. Cart items must have cj_vid.' 
+      });
+    }
+
+    // 6. Submit order to CJ API
+    console.log(`[admin] Submitting order ${order.order_number} to CJ with data:`, JSON.stringify(cjOrderData, null, 2));
+    
+    let cjResponse;
+    let cjOrderId;
+    let cjOrderNumber;
+    
+    try {
+      cjResponse = await cjClient.createOrder(cjOrderData);
+      cjOrderId = cjResponse?.orderId;
+      cjOrderNumber = cjResponse?.orderNumber || cjResponse?.orderNum;
+    } catch (cjError) {
+      // IMPORTANT: CJ API may create the order even if returns an error
+      // (e.g., "Balance is insufficient" after order is created)
+      // Try to recover by checking if order was created by searching CJ by order number
+      console.warn(`[admin] CJ order creation threw error: ${cjError.message}`);
+      console.log(`[admin] Attempting recovery: checking if order was created on CJ despite error...`);
+      
+      try {
+        // Try to find the order in CJ by its order number
+        // We'll use a search/list approach - for now, we don't have a direct lookup, so re-throw
+        throw cjError;
+      } catch (recoveryError) {
+        throw cjError; // Re-throw the original CJ error if recovery fails
+      }
+    }
+
+    if (!cjOrderId) {
+      console.error('[admin] CJ order creation returned no orderId:', cjResponse);
+      return res.status(502).json({ 
+        error: 'CJ order creation failed',
+        details: 'Missing orderId from CJ',
+        cjResponse
+      });
+    }
+
+    // 7. Update local order with CJ info
+    await updateOrderCJInfo(orderId, cjOrderId, cjOrderNumber, 'SUBMITTED');
+
+    console.log(`[admin] ✓ Order ${order.order_number} submitted to CJ. CJ Order ID: ${cjOrderId}, CJ Order #: ${cjOrderNumber}`);
+
+    res.json({
+      success: true,
+      message: 'Order submitted to CJ successfully',
+      cjOrderId,
+      cjOrderNumber,
+      orderNumber: order.order_number
+    });
+
+  } catch (error) {
+    console.error('[admin] Submit to CJ error:', error);
+    
+    // IMPORTANT: CJ API may create order even if returns an error (e.g., "Balance is insufficient")
+    // Try to detect if order was created despite the error by checking if our order now has CJ info
+    try {
+      const updatedOrder = await getOrderById(orderId);
+      if (updatedOrder?.cj_order_id) {
+        // Order was actually created! Return success
+        console.log(`[admin] ✓ Despite error, order ${updatedOrder.order_number} was created on CJ. CJ Order ID: ${updatedOrder.cj_order_id}`);
+        return res.json({
+          success: true,
+          message: 'Order submitted to CJ successfully',
+          cjOrderId: updatedOrder.cj_order_id,
+          cjOrderNumber: updatedOrder.cj_order_number,
+          orderNumber: updatedOrder.order_number,
+          note: 'Order was created despite initial error response'
+        });
+      }
+    } catch (checkError) {
+      console.error('[admin] Error checking if order was created:', checkError);
+    }
+    
+    res.status(500).json({ 
+      error: 'Failed to submit order to CJ',
+      details: error.message 
+    });
+  }
+});
+    });
+  }
+});
+
+// Get all orders for admin dashboard
+router.get('/orders', async (req, res) => {
+  try {
+    const result = await pool.query(`
+      SELECT 
+        id,
+        order_number,
+        user_id,
+        items,
+        total_amount,
+        status,
+        cj_order_id,
+        cj_order_number,
+        cj_tracking_number,
+        cj_tracking_url,
+        cj_status,
+        cj_submitted_at,
+        created_at,
+        updated_at
+      FROM orders
+      ORDER BY created_at DESC
+      LIMIT 100
+    `);
+
+    // Parse items JSON for each order
+    const orders = result.rows.map(order => ({
+      ...order,
+      items: JSON.parse(order.items)
+    }));
+
+    res.json({ orders });
+  } catch (error) {
+    console.error('[admin] Get orders error:', error);
+    res.status(500).json({ error: 'Failed to fetch orders' });
+  }
+});
+
+// Auto-fix missing cj_vid by fetching from CJ API
+// POST /api/admin/products/fix-missing-vids
+router.post('/products/fix-missing-vids', async (req, res) => {
+  try {
+    // Find all products with cj_pid but no cj_vid
+    const result = await pool.query(`
+      SELECT id, cj_pid, product_name 
+      FROM curated_products 
+      WHERE cj_pid IS NOT NULL AND (cj_vid IS NULL OR cj_vid = '')
+      AND is_active = TRUE
+      LIMIT 50
+    `);
+
+    if (result.rows.length === 0) {
+      return res.json({ 
+        success: true, 
+        message: 'All active products already have cj_vid',
+        fixed: 0,
+        failed: 0
+      });
+    }
+
+    console.log(`[admin] Found ${result.rows.length} products missing cj_vid, fetching from CJ...`);
+
+    const fixed = [];
+    const failed = [];
+    let rateLimitHit = false;
+
+    for (const product of result.rows) {
+      try {
+        // Fetch product details from CJ
+        const cjProduct = await cjClient.getProductDetails(product.cj_pid);
+        
+        if (!cjProduct || !cjProduct.variants || cjProduct.variants.length === 0) {
+          failed.push({ 
+            id: product.id, 
+            name: product.product_name, 
+            reason: 'No variants found in CJ' 
+          });
+          continue;
+        }
+
+        // Use first variant (default)
+        const defaultVariant = cjProduct.variants[0];
+        
+        if (!defaultVariant.vid) {
+          failed.push({ 
+            id: product.id, 
+            name: product.product_name, 
+            reason: 'Variant missing VID' 
+          });
+          continue;
+        }
+
+        // Update product with cj_vid and fetch inventory to update stock
+        await pool.query(`
+          UPDATE curated_products 
+          SET cj_vid = $1, updated_at = NOW() 
+          WHERE id = $2
+        `, [defaultVariant.vid, product.id]);
+
+        // Try to fetch inventory and update stock (CN warehouses only)
+        try {
+          const inventory = await cjClient.getInventory(defaultVariant.vid);
+          const cnWarehouses = inventory.filter(w => w.countryCode === 'CN');
+          const totalStock = cnWarehouses.reduce((sum, w) => sum + (Number(w.totalInventory) || 0), 0);
+          
+          await pool.query(`
+            UPDATE curated_products 
+            SET stock_quantity = $1, updated_at = NOW() 
+            WHERE id = $2
+          `, [totalStock, product.id]);
+
+          // Update inventory table
+          await pool.query(`DELETE FROM curated_product_inventories WHERE curated_product_id = $1`, [product.id]);
+          for (const wh of inventory) {
+            await pool.query(`
+              INSERT INTO curated_product_inventories 
+              (curated_product_id, cj_pid, cj_vid, warehouse_id, warehouse_name, country_code, total_inventory, cj_inventory, factory_inventory, updated_at)
+              VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, NOW())
+            `, [
+              product.id,
+              product.cj_pid,
+              defaultVariant.vid,
+              wh.warehouseId,
+              wh.warehouseName,
+              wh.countryCode,
+              wh.totalInventory,
+              wh.cjInventory,
+              wh.factoryInventory
+            ]);
+          }
+
+          fixed.push({ 
+            id: product.id, 
+            name: product.product_name, 
+            cj_vid: defaultVariant.vid,
+            stock: totalStock
+          });
+
+          console.log(`[admin] ✓ Fixed product ${product.id}: ${product.product_name} -> cj_vid: ${defaultVariant.vid}, stock: ${totalStock}`);
+        } catch (invError) {
+          // If inventory fetch fails, still mark VID as fixed
+          fixed.push({ 
+            id: product.id, 
+            name: product.product_name, 
+            cj_vid: defaultVariant.vid,
+            stock: 'inventory_fetch_failed',
+            inventoryError: invError.message
+          });
+          console.warn(`[admin] ⚠️ Fixed VID for product ${product.id} but inventory fetch failed:`, invError.message);
+        }
+
+      } catch (error) {
+        // Check if it's a rate limit error
+        if (error.message && (error.message.includes('429') || error.message.includes('rate limit'))) {
+          rateLimitHit = true;
+        }
+        failed.push({ 
+          id: product.id, 
+          name: product.product_name, 
+          reason: error.message 
+        });
+        console.error(`[admin] Failed to fix product ${product.id}:`, error.message);
+      }
+    }
+
+    res.json({
+      success: true,
+      message: `Fixed ${fixed.length} products, ${failed.length} failed${rateLimitHit ? ' (rate limit hit)' : ''}`,
+      fixed,
+      failed,
+      rateLimitHit,
+      note: rateLimitHit ? 'CJ API rate limit reached. Wait until 6pm (CJ midnight) for quota reset, then re-run.' : null
+    });
+
+  } catch (error) {
+    console.error('[admin] Fix missing VIDs error:', error);
+    // Ensure we always send valid JSON
+    res.status(500).json({ 
+      success: false,
+      error: 'Failed to fix missing VIDs',
+      details: error.message 
+    });
+  }
+});
+
+// Create test order for development/testing
+router.post('/orders/create-test', requireAdmin, async (req, res) => {
+  try {
+    // Get a real product with valid cj_vid from curated_products
+    const productResult = await pool.query(`
+      SELECT id, cj_pid, cj_vid, product_name, custom_price 
+      FROM curated_products 
+      WHERE cj_vid IS NOT NULL AND cj_vid != '' AND is_active = TRUE
+      ORDER BY id DESC
+      LIMIT 1
+    `);
+
+    if (productResult.rows.length === 0) {
+      return res.status(400).json({ 
+        error: 'No products with valid cj_vid found. Please add a product with a valid CJ variant ID first.' 
+      });
+    }
+
+    const product = productResult.rows[0];
+    const orderNumber = 'TEST-' + Date.now();
+    const items = JSON.stringify([{
+      id: product.id.toString(),
+      cj_pid: product.cj_pid,
+      cj_vid: product.cj_vid,
+      name: product.product_name,
+      price: product.custom_price || 100,
+      quantity: 1
+    }]);
+
+    const subtotal = product.custom_price || 100;
+    const shipping = 50.00;
+    const total = subtotal + shipping;
+
+    await pool.query(
+      `INSERT INTO orders 
+       (user_id, order_number, items, subtotal, shipping, discount, total, status, 
+        customer_email, customer_name, shipping_country, shipping_province, shipping_city, 
+        shipping_address, shipping_postal_code, shipping_phone, shipping_method, created_at) 
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, NOW())`,
+      [
+        1, orderNumber, items, subtotal, shipping, 0, total, 'paid', 
+        'test@example.com', 'Test Customer', 'ZA', 'Gauteng', 'Johannesburg',
+        '123 Test Street', '2196', '0821234567', 'USPS+'
+      ]
+    );
+
+    res.json({
+      success: true,
+      message: 'Test order created with real product',
+      orderNumber,
+      product: {
+        name: product.product_name,
+        cj_pid: product.cj_pid,
+        cj_vid: product.cj_vid
+      },
+      status: 'paid',
+      total
+    });
+  } catch (err) {
+    console.error('[admin] Create test order error:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Sync all product prices with current CJ prices
+// POST /api/admin/products/sync-cj-prices
+router.post('/products/sync-cj-prices', async (req, res) => {
+  try {
+    const { limit = 50 } = req.body;
+
+    // Get active products with CJ PIDs
+    const result = await pool.query(`
+      SELECT id, cj_pid, product_name, cj_cost_price, custom_price 
+      FROM curated_products 
+      WHERE cj_pid IS NOT NULL AND is_active = TRUE
+      ORDER BY updated_at ASC
+      LIMIT $1
+    `, [limit]);
+
+    if (result.rows.length === 0) {
+      return res.json({ 
+        success: true, 
+        message: 'No products to sync',
+        synced: 0,
+        priceChanges: []
+      });
+    }
+
+    console.log(`[admin] Syncing prices for ${result.rows.length} products from CJ...`);
+
+    const priceChanges = [];
+    const errors = [];
+    let syncedCount = 0;
+
+    for (const product of result.rows) {
+      try {
+        // Fetch current CJ price
+        const cjProduct = await cjClient.getProductDetails(product.cj_pid);
+        const currentCJPrice = parseFloat(cjProduct.price || 0);
+
+        if (currentCJPrice <= 0) {
+          errors.push({ id: product.id, name: product.product_name, reason: 'Invalid CJ price' });
+          continue;
+        }
+
+        const storedCJPrice = parseFloat(product.cj_cost_price || 0);
+        const priceDiff = Math.abs(currentCJPrice - storedCJPrice);
+        const percentChange = storedCJPrice > 0 ? (priceDiff / storedCJPrice) * 100 : 0;
+
+        // Always update if price is different (even by 0.01%)
+        if (currentCJPrice !== storedCJPrice) {
+          await loadPricingConfig(); // Ensure latest markup config
+          const costZAR = Math.round(currentCJPrice * USD_TO_ZAR * 100) / 100;
+          const newRetailPrice = Math.round(costZAR * PRICE_MARKUP * 100) / 100;
+
+          await pool.query(`
+            UPDATE curated_products 
+            SET cj_cost_price = $1, 
+                suggested_price = $2,
+                custom_price = $3,
+                updated_at = NOW()
+            WHERE id = $4
+          `, [currentCJPrice, newRetailPrice, newRetailPrice, product.id]);
+
+          if (percentChange > 0.5) { // Only log significant changes (>0.5%)
+            priceChanges.push({
+              id: product.id,
+              name: product.product_name,
+              oldCostUSD: storedCJPrice,
+              newCostUSD: currentCJPrice,
+              oldPriceZAR: product.custom_price,
+              newPriceZAR: newRetailPrice,
+              percentChange: Math.round(percentChange * 10) / 10,
+              increased: currentCJPrice > storedCJPrice
+            });
+          }
+
+          syncedCount++;
+        }
+      } catch (err) {
+        errors.push({ id: product.id, name: product.product_name, reason: err.message });
+        console.error(`[admin] Price sync failed for ${product.cj_pid}:`, err.message);
+      }
+    }
+
+    res.json({
+      success: true,
+      message: `Synced ${syncedCount} products, ${priceChanges.length} prices changed significantly`,
+      synced: syncedCount,
+      priceChanges,
+      errors: errors.length > 0 ? errors : undefined
+    });
+  } catch (error) {
+    console.error('[admin] Sync CJ prices error:', error);
+    res.status(500).json({ 
+      success: false,
+      error: 'Failed to sync CJ prices',
+      details: error.message 
+    });
+  }
+});
+
