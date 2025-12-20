@@ -202,26 +202,18 @@ router.get('/analytics', async (req, res) => {
           FROM orders
           WHERE cj_order_id IS NOT NULL
         ),
-        raw_items AS (
+        order_items AS (
           SELECT 
-            item->>'id' AS raw_id,
             regexp_replace(item->>'id', '\\D', '', 'g') AS numeric_id_str,
             COALESCE((item->>'quantity')::numeric, 0) AS qty,
             COALESCE((item->>'price')::numeric, 0) AS sale_price
           FROM cj_orders, LATERAL jsonb_array_elements(items::jsonb) AS item
-        ),
-        order_items AS (
-          SELECT 
-            NULLIF(numeric_id_str, '')::int AS product_id,
-            qty,
-            sale_price
-          FROM raw_items
-          WHERE NULLIF(numeric_id_str, '') IS NOT NULL
         )
         SELECT 
           COALESCE(SUM((COALESCE(cp.custom_price, oi.sale_price, 0) - (COALESCE(cp.cj_cost_price, 0) * $1)) * oi.qty), 0) AS actual_revenue
         FROM order_items oi
-        JOIN curated_products cp ON cp.id = oi.product_id
+        JOIN curated_products cp ON cp.id::text = oi.numeric_id_str
+        WHERE oi.numeric_id_str ~ '^[0-9]+$'
       `,
       [USD_TO_ZAR]
     );
