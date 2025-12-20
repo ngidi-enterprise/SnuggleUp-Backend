@@ -19,6 +19,7 @@ import db from './db.js';
 // Load environment variables
 dotenv.config();
 
+// Express server initialization
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 
