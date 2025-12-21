@@ -862,6 +862,72 @@ router.get('/cj-products/:pid', async (req, res) => {
   }
 });
 
+// Diagnostics: Compare supplier logistics availability for given PIDs
+// POST /api/admin/cj/diagnose-products { pids: string[], postalCode?: string }
+router.post('/cj/diagnose-products', async (req, res) => {
+  try {
+    const { pids = [], postalCode = '2196' } = req.body || {};
+    if (!Array.isArray(pids) || pids.length === 0) {
+      return res.status(400).json({ error: 'Provide an array of CJ product IDs (pids)' });
+    }
+
+    const results = [];
+    for (const pid of pids) {
+      try {
+        const details = await cjClient.getProductDetails(pid);
+        const variants = details.variants || [];
+        const firstVid = variants[0]?.vid;
+
+        let freightOptions = [];
+        if (firstVid) {
+          try {
+            freightOptions = await cjClient.getFreightQuote({
+              startCountryCode: 'CN',
+              endCountryCode: 'ZA',
+              postalCode,
+              products: [{ vid: firstVid, quantity: 1 }]
+            });
+          } catch (fqErr) {
+            console.warn(`[diagnostics] Freight quote failed for pid ${pid}:`, fqErr.message);
+            freightOptions = [];
+          }
+        }
+
+        results.push({
+          pid,
+          name: details.name,
+          categoryId: details.categoryId,
+          categoryName: details.categoryName,
+          weight: details.weight,
+          variants: variants.map(v => ({ vid: v.vid, name: v.name, price: v.price, weight: v.weight })),
+          firstVid,
+          freightOptions: freightOptions.map(f => ({
+            logisticName: f.logisticName,
+            totalPostage: f.totalPostage,
+            deliveryDay: f.deliveryDay,
+            currency: f.currency
+          })),
+          hasFreight: freightOptions.length > 0
+        });
+      } catch (err) {
+        results.push({ pid, error: err.message });
+      }
+    }
+
+    const summary = {
+      total: results.length,
+      withFreight: results.filter(r => r.hasFreight).length,
+      withoutFreight: results.filter(r => r.hasFreight === false).length,
+      logisticsPerPid: Object.fromEntries(results.map(r => [r.pid, (r.freightOptions || []).map(o => o.logisticName)]))
+    };
+
+    res.json({ success: true, postalCode, results, summary });
+  } catch (error) {
+    console.error('[admin] CJ diagnostics error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
 // Search curated products (by name, SKU/PID, or database ID)
 router.get('/products/search', async (req, res) => {
   try {
@@ -1155,6 +1221,45 @@ router.post('/orders/:orderId/submit-to-cj', async (req, res) => {
       return res.status(400).json({ 
         error: 'No CJ products found in order. Cart items must have cj_vid.' 
       });
+    }
+
+    // 5.1 Validate/adjust logistic line based on CJ freight availability to ZA
+    try {
+      const postalCode = order.shipping_postal_code || '2196';
+      const perProductOptions = [];
+      for (const p of cjOrderData.products) {
+        try {
+          const opts = await cjClient.getFreightQuote({
+            startCountryCode: 'CN',
+            endCountryCode: 'ZA',
+            postalCode,
+            products: [{ vid: p.vid, quantity: p.quantity || 1 }]
+          });
+          perProductOptions.push(new Set((opts || []).map(o => o.logisticName)));
+        } catch (fqErr) {
+          perProductOptions.push(new Set());
+          console.warn(`[admin] Freight options lookup failed for vid ${p.vid}:`, fqErr.message);
+        }
+      }
+      // Compute intersection of logistic names across all products
+      let intersection = null;
+      for (const s of perProductOptions) {
+        if (intersection === null) {
+          intersection = new Set(s);
+        } else {
+          intersection = new Set([...intersection].filter(x => s.has(x)));
+        }
+      }
+      const commonOptions = intersection ? [...intersection] : [];
+      if (commonOptions.length === 0) {
+        console.warn('[admin] No common logistic line across products to ZA. CJ may reject order.');
+      } else if (!commonOptions.includes(cjOrderData.logisticName)) {
+        const fallback = commonOptions[0];
+        console.log(`[admin] Adjusting logisticName from ${cjOrderData.logisticName} to ${fallback} based on CJ availability`);
+        cjOrderData.logisticName = fallback;
+      }
+    } catch (adjustErr) {
+      console.warn('[admin] Logistic line adjustment skipped due to error:', adjustErr.message);
     }
 
     // 6. Submit order to CJ API
