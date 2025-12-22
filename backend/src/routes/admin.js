@@ -1187,6 +1187,20 @@ router.get('/orders/:orderId/debug', async (req, res) => {
   }
 });
 
+// Get recent CJ submissions for debugging
+router.get('/cj/recent-submissions', async (req, res) => {
+  try {
+    res.json({
+      submissions: recentCJSubmissions,
+      count: recentCJSubmissions.length,
+      note: 'Recent CJ order submissions with full request/response data'
+    });
+  } catch (error) {
+    console.error('[admin] Error retrieving CJ submissions:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
 // Submit paid order to CJ Dropshipping
 router.post('/orders/:orderId/submit-to-cj', async (req, res) => {
   try {
@@ -1273,7 +1287,13 @@ router.post('/orders/:orderId/submit-to-cj', async (req, res) => {
       cjResponse = await cjClient.createOrder(cjOrderData);
       cjOrderId = cjResponse?.orderId;
       cjOrderNumber = cjResponse?.orderNumber || cjResponse?.orderNum;
+      
+      // Store successful submission
+      storeCJSubmission(order.order_number, cjOrderData, cjResponse);
     } catch (cjError) {
+      // Store failed submission
+      storeCJSubmission(order.order_number, cjOrderData, cjError.response || null, cjError.message);
+      
       // IMPORTANT: CJ API may create the order even if returns an error
       // (e.g., "Balance is insufficient" after order is created)
       // Try to recover by checking if order was created by searching CJ by order number
@@ -1417,7 +1437,7 @@ router.post('/products/fix-missing-vids', async (req, res) => {
             name: product.product_name, 
             reason: 'No variants found in CJ' 
           });
-          continue;
+          continue
         }
 
         // Use first variant (default)
