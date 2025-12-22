@@ -406,6 +406,9 @@ export const cjClient = {
       headers: { 'CJ-Access-Token': accessToken },
     });
 
+    // Log raw CJ response for debugging
+    console.log('[cjClient] Raw CJ response:', JSON.stringify(json, null, 2));
+
     // CJ may return HTTP 200 with result=false and message explaining the issue
     // Sometimes the order is still created despite the error (e.g., "Balance is insufficient")
     // So we log the warning but continue if we got data back
