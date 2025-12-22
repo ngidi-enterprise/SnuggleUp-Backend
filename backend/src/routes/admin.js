@@ -9,6 +9,24 @@ import { getSchedulerHealth, generateSchedulerReport, getExecutionHistory } from
 
 export const router = express.Router();
 
+// In-memory store for recent CJ submissions (for debugging)
+const recentCJSubmissions = [];
+const MAX_STORED_SUBMISSIONS = 20;
+
+function storeCJSubmission(orderNumber, request, response, error = null) {
+  recentCJSubmissions.unshift({
+    timestamp: new Date().toISOString(),
+    orderNumber,
+    request,
+    response,
+    error,
+    url: 'https://developers.cjdropshipping.com/api2.0/v1/shopping/order/createOrderV2'
+  });
+  if (recentCJSubmissions.length > MAX_STORED_SUBMISSIONS) {
+    recentCJSubmissions.pop();
+  }
+}
+
 // Dynamic pricing config (loaded from DB site_config; falls back to ENV/defaults)
 let USD_TO_ZAR = 18.0;
 let PRICE_MARKUP = 1.4;
