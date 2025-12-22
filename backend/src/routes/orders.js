@@ -281,7 +281,7 @@ export const buildCJOrderData = (order) => {
     shippingAddress: shippingInfo.address,
     shippingPhone: cjPhone,
     shippingZip: shippingInfo.postalCode,
-    consigneeIdNum: consigneeId,
+    consigneeID: consigneeId,
     // Do NOT send consigneeTaxNumber for South Africa; CJ flags ID conflicts
     // consigneeTaxNumber: '',
     email: order.customer_email,
