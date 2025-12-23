@@ -66,6 +66,97 @@ app.get('/api/ping', (_req, res) => {
   res.json({ ok: true, time: new Date().toISOString() });
 });
 
+// Privacy Policy page
+app.get('/privacy', (req, res) => {
+  res.send(`
+    <!DOCTYPE html>
+    <html>
+    <head>
+      <title>Privacy Policy - SnuggleUp</title>
+      <meta charset="UTF-8">
+      <meta name="viewport" content="width=device-width, initial-scale=1.0">
+      <style>
+        body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; max-width: 900px; margin: 0 auto; padding: 20px; line-height: 1.6; color: #333; }
+        h1 { color: #ff6b35; }
+      </style>
+    </head>
+    <body>
+      <h1>Privacy Policy</h1>
+      <p>Your privacy is important to us at SnuggleUp Baby Store. We are committed to protecting your personal data and respecting your privacy rights.</p>
+      <h2>Information We Collect</h2>
+      <p>We collect information you provide directly to us, such as when you create an account, place an order, or contact us.</p>
+      <h2>How We Use Your Information</h2>
+      <p>We use the information we collect to provide, maintain, and improve our services, process transactions, and communicate with you.</p>
+      <h2>Contact Us</h2>
+      <p>For privacy concerns, please contact us at <strong>support@snuggleup.co.za</strong></p>
+    </body>
+    </html>
+  `);
+});
+
+// Terms of Service page
+app.get('/terms', (req, res) => {
+  res.send(`
+    <!DOCTYPE html>
+    <html>
+    <head>
+      <title>Terms of Service - SnuggleUp</title>
+      <meta charset="UTF-8">
+      <meta name="viewport" content="width=device-width, initial-scale=1.0">
+      <style>
+        body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; max-width: 900px; margin: 0 auto; padding: 20px; line-height: 1.6; color: #333; }
+        h1 { color: #ff6b35; }
+      </style>
+    </head>
+    <body>
+      <h1>Terms of Service</h1>
+      <p>Welcome to SnuggleUp Baby Store. By using our website and services, you agree to comply with these terms and conditions.</p>
+      <h2>Use License</h2>
+      <p>Permission is granted to temporarily download one copy of the materials (information or software) from SnuggleUp for personal, non-commercial transitory viewing only.</p>
+      <h2>Disclaimer</h2>
+      <p>The materials on SnuggleUp's website are provided on an 'as is' basis. We make no warranties, expressed or implied, and hereby disclaim and negate all other warranties.</p>
+      <h2>Limitations</h2>
+      <p>In no event shall SnuggleUp or its suppliers be liable for any damages arising out of or in connection with the use of this website.</p>
+      <h2>Contact Us</h2>
+      <p>For questions about our terms, please contact us at <strong>support@snuggleup.co.za</strong></p>
+    </body>
+    </html>
+  `);
+});
+
+// Data Deletion page
+app.get('/data-deletion', (req, res) => {
+  res.send(`
+    <!DOCTYPE html>
+    <html>
+    <head>
+      <title>Data Deletion - SnuggleUp</title>
+      <meta charset="UTF-8">
+      <meta name="viewport" content="width=device-width, initial-scale=1.0">
+      <style>
+        body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; max-width: 900px; margin: 0 auto; padding: 20px; line-height: 1.6; color: #333; }
+        h1 { color: #ff6b35; }
+      </style>
+    </head>
+    <body>
+      <h1>Data Deletion Request</h1>
+      <p>At SnuggleUp Baby Store, we respect your right to delete your personal data. If you would like to request deletion of your account and associated information, please follow the steps below.</p>
+      <h2>How to Request Data Deletion</h2>
+      <p>To request deletion of your data, please send an email to <strong>support@snuggleup.co.za</strong> with the subject line "Data Deletion Request" and include:</p>
+      <ul>
+        <li>Your full name</li>
+        <li>The email address associated with your account</li>
+        <li>A brief description of what data you'd like deleted</li>
+      </ul>
+      <h2>Processing Your Request</h2>
+      <p>We will process your data deletion request within 30 days of receiving your request. You will receive a confirmation email once your data has been deleted.</p>
+      <h2>Contact Us</h2>
+      <p>If you have any questions about this process, please contact us at <strong>support@snuggleup.co.za</strong></p>
+    </body>
+    </html>
+  `);
+});
+
 // Environment checklist health endpoint
 app.get('/api/health', async (req, res) => {
   // Basic DB check
