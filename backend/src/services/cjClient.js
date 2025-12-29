@@ -1,4 +1,5 @@
 import crypto from 'crypto';
+import { pool } from '../db.js';
 import { getCachedTranslation, saveTranslation, hashText } from './reviewTranslationCache.js';
 
 // CJ Dropshipping API client (lightweight, pluggable for your credentials)
@@ -28,23 +29,6 @@ const SEARCH_CACHE_TTL = 5 * 60 * 1000; // 5 minutes
 // Small in-memory LRU to avoid repeat translations during a process lifetime
 const translationLru = new Map();
 const TRANSLATION_LRU_LIMIT = 300;
-
-function lruGet(key) {
-  if (!translationLru.has(key)) return null;
-  const value = translationLru.get(key);
-  translationLru.delete(key);
-  translationLru.set(key, value);
-  return value;
-}
-
-function lruSet(key, value) {
-  if (translationLru.has(key)) translationLru.delete(key);
-  translationLru.set(key, value);
-  if (translationLru.size > TRANSLATION_LRU_LIMIT) {
-    const oldestKey = translationLru.keys().next().value;
-    translationLru.delete(oldestKey);
-  }
-}
 
 function getCacheKey(params) {
   return JSON.stringify(params);
@@ -81,6 +65,70 @@ async function ensureThrottle() {
     await sleep(CJ_MIN_INTERVAL_MS - diff);
   }
   lastCJCallAt = Date.now();
+}
+
+function translationCacheKey(pid, commentId, sourceHash) {
+  return `${pid || 'unknown'}::${commentId || 'unknown'}::${sourceHash || ''}`;
+}
+
+function lruGet(key) {
+  if (!translationLru.has(key)) return null;
+  const value = translationLru.get(key);
+  translationLru.delete(key);
+  translationLru.set(key, value);
+  return value;
+}
+
+function lruSet(key, value) {
+  if (translationLru.has(key)) translationLru.delete(key);
+  translationLru.set(key, value);
+  if (translationLru.size > TRANSLATION_LRU_LIMIT) {
+    const oldestKey = translationLru.keys().next().value;
+    translationLru.delete(oldestKey);
+  }
+}
+
+async function getCachedTranslation(pid, commentId, sourceHash) {
+  const key = translationCacheKey(pid, commentId, sourceHash);
+  const mem = lruGet(key);
+  if (mem) return mem;
+
+  try {
+    const res = await pool.query(
+      `SELECT translated_text, detected_lang FROM product_review_translations
+       WHERE pid = $1 AND comment_id = $2 AND source_hash = $3
+       LIMIT 1`,
+      [pid, commentId, sourceHash]
+    );
+    const row = res.rows?.[0];
+    if (row) {
+      const value = { translatedText: row.translated_text, detectedLang: row.detected_lang || null };
+      lruSet(key, value);
+      return value;
+    }
+  } catch (err) {
+    console.warn('⚠️ Translation cache lookup failed:', err.message);
+  }
+  return null;
+}
+
+async function saveCachedTranslation({ pid, commentId, sourceHash, sourceText, translatedText, detectedLang }) {
+  const key = translationCacheKey(pid, commentId, sourceHash);
+  try {
+    await pool.query(
+      `INSERT INTO product_review_translations (pid, comment_id, source_hash, source_text, translated_text, detected_lang)
+       VALUES ($1, $2, $3, $4, $5, $6)
+       ON CONFLICT (pid, comment_id, source_hash)
+       DO UPDATE SET translated_text = EXCLUDED.translated_text,
+                     detected_lang = EXCLUDED.detected_lang,
+                     source_text = EXCLUDED.source_text,
+                     updated_at = CURRENT_TIMESTAMP`,
+      [pid, commentId, sourceHash, sourceText, translatedText, detectedLang]
+    );
+    lruSet(key, { translatedText, detectedLang });
+  } catch (err) {
+    console.warn('⚠️ Translation cache save failed:', err.message);
+  }
 }
 
 
@@ -151,16 +199,15 @@ async function refreshAccessToken() {
   return cjTokenCache.accessToken;
 }
 
-// Get and cache CJ access token (or refresh it if near expiry)
 async function getAccessToken(force = false) {
   const now = Date.now();
   // Use cached token if valid (check with 10 minute buffer instead of 1 minute)
   if (!force && cjTokenCache.accessToken && cjTokenCache.accessTokenExpiry > now + 600000) {
-    console.log('✅ Using cached CJ access token');
     return cjTokenCache.accessToken;
   }
+  
   if (!CJ_EMAIL || !CJ_API_KEY) {
-    throw new Error('CJ_EMAIL and CJ_API_KEY must be set in environment');
+    throw new Error('CJ_EMAIL and CJ_API_KEY env vars are required');
   }
   
   // Try refresh first if we have a (not expired) refresh token.
@@ -201,111 +248,95 @@ async function getAccessToken(force = false) {
   }
 }
 
+const cjClient = {
+  // 1. Search products (GET /product/list)
+  async searchProducts({ productNameEn = '', pageNum = 1, pageSize = 20, categoryId, minPrice, maxPrice } = {}) {
+  const cacheKey = getCacheKey({ productNameEn, pageNum, pageSize, categoryId, minPrice, maxPrice });
+  const cached = getFromCache(cacheKey);
+  if (cached) return cached;
 
-// Placeholder signing (for webhook verification)
-function hmacSHA256(content, secret) {
-  return crypto.createHmac('sha256', secret).update(content).digest('hex');
-}
+  const normalizeUrl = (u) => {
+    if (!u) return '';
+    let s = String(u).trim();
+    if (s.startsWith('//')) s = 'https:' + s;
+    if (s.startsWith('http://')) s = s.replace(/^http:/, 'https:');
+    return s;
+  };
+  
+  const accessToken = await getAccessToken();
+  const url = CJ_BASE_URL + '/product/list';
+  const query = { 
+    productNameEn: productNameEn || '',
+    pageNum,
+    pageSize,
+    categoryId,
+    minPrice,
+    maxPrice,
+    // Hint to CJ API: only return products sourced from China
+    fromCountryCode: 'CN',
+  };
+  const json = await http('GET', url, {
+    query,
+    headers: { 'CJ-Access-Token': accessToken },
+  });
+  
+  if (!json.result || !json.data) {
+    console.error('CJ searchProducts error:', JSON.stringify(json));
+    throw new Error('CJ searchProducts failed: ' + (json.message || 'Unknown error'));
+  }
 
-export const cjClient = {
-  getStatus() {
+  const rawList = (json.data.list || []);
+  // Debug: log first product's raw structure to see all available fields
+  if (rawList.length > 0) {
+    console.log('📋 CJ Product API raw fields sample:', JSON.stringify(rawList[0], null, 2));
+  }
+  const items = rawList.map((p) => {
+    // Attempt to derive the origin country from several possible CJ fields.
+    // CJ product list responses may include one of these (field names vary between docs & envs):
+    //  - fromCountryCode
+    //  - countryCode
+    //  - sourceCountryCode
+    // If none are present we set originCountry to null.
+    const originCountry = p.fromCountryCode || p.countryCode || p.sourceCountryCode || null;
     return {
-      baseUrl: CJ_BASE_URL,
-      hasEmail: Boolean(CJ_EMAIL),
-      hasApiKey: Boolean(CJ_API_KEY),
-      webhookVerification: Boolean(CJ_WEBHOOK_SECRET),
-      tokenExpiry: cjTokenCache.accessTokenExpiry,
+      pid: p.pid,
+      name: p.productNameEn,
+      sku: p.productSku,
+      price: p.sellPrice,
+      image: normalizeUrl(p.productImage),
+      description: p.description || p.productDescription || '', // Include description
+      categoryId: p.categoryId,
+      categoryName: p.categoryName,
+      weight: p.productWeight,
+      isFreeShipping: p.isFreeShipping,
+      listedNum: p.listedNum,
+      originCountry,
     };
-  },
+  }).filter(it => {
+    // Prefer explicit CN; if the field is absent (CJ sometimes omits it),
+    // keep the item because we already requested fromCountryCode=CN upstream.
+    return it.originCountry === 'CN' || it.originCountry === null || it.originCountry === undefined;
+  });
 
-  // 1. Search CJ products (GET /product/list)
-  async searchProducts({ productNameEn, pageNum = 1, pageSize = 20, categoryId, minPrice, maxPrice } = {}) {
-    // Check cache first
-    const cacheKey = getCacheKey({ productNameEn, pageNum, pageSize, categoryId, minPrice, maxPrice });
-    const cached = getFromCache(cacheKey);
-    if (cached) return cached;
-
-    const normalizeUrl = (u) => {
-      if (!u) return '';
-      let s = String(u).trim();
-      if (s.startsWith('//')) s = 'https:' + s;
-      if (s.startsWith('http://')) s = s.replace(/^http:/, 'https:');
-      return s;
-    };
-    const accessToken = await getAccessToken();
-    const url = CJ_BASE_URL + '/product/list';
-    const query = { 
-      productNameEn: productNameEn || '',
-      pageNum,
-      pageSize,
-      categoryId,
-      minPrice,
-      maxPrice,
-      // Hint to CJ API: only return products sourced from China
-      fromCountryCode: 'CN',
-    };
-    const json = await http('GET', url, {
-      query,
-      headers: { 'CJ-Access-Token': accessToken },
-    });
-    
-    if (!json.result || !json.data) {
-      console.error('CJ searchProducts error:', JSON.stringify(json));
-      throw new Error('CJ searchProducts failed: ' + (json.message || 'Unknown error'));
+  const result = {
+    source: 'cj',
+    items,
+    pageNum: json.data.pageNum,
+    pageSize: json.data.pageSize,
+    // total reflects results after upstream CN filter and category filter
+    total: items.length,
+    filtered: {
+      applied: 'fromCountryCode=CN + baby/kids category only',
+      originalTotal: json.data.total,
+      originalReturned: rawList.length,
+      afterFilter: items.length
     }
-
-    const rawList = (json.data.list || []);
-    // Debug: log first product's raw structure to see all available fields
-    if (rawList.length > 0) {
-      console.log('📋 CJ Product API raw fields sample:', JSON.stringify(rawList[0], null, 2));
-    }
-    const items = rawList.map((p) => {
-      // Attempt to derive the origin country from several possible CJ fields.
-      // CJ product list responses may include one of these (field names vary between docs & envs):
-      //  - fromCountryCode
-      //  - countryCode
-      //  - sourceCountryCode
-      // If none are present we set originCountry to null.
-      const originCountry = p.fromCountryCode || p.countryCode || p.sourceCountryCode || null;
-      return {
-        pid: p.pid,
-        name: p.productNameEn,
-        sku: p.productSku,
-        price: p.sellPrice,
-        image: normalizeUrl(p.productImage),
-        description: p.description || p.productDescription || '', // Include description
-        categoryId: p.categoryId,
-        categoryName: p.categoryName,
-        weight: p.productWeight,
-        isFreeShipping: p.isFreeShipping,
-        listedNum: p.listedNum,
-        originCountry,
-      };
-    }).filter(it => {
-      // Prefer explicit CN; if the field is absent (CJ sometimes omits it),
-      // keep the item because we already requested fromCountryCode=CN upstream.
-      return it.originCountry === 'CN' || it.originCountry === null || it.originCountry === undefined;
-    });
-
-    const result = {
-      source: 'cj',
-      items,
-      pageNum: json.data.pageNum,
-      pageSize: json.data.pageSize,
-      // total reflects results after upstream CN filter and category filter
-      total: items.length,
-      filtered: {
-        applied: 'fromCountryCode=CN + baby/kids category only',
-        originalTotal: json.data.total,
-        originalReturned: rawList.length,
-        afterFilter: items.length
-      }
-    };
-    
-    // Cache the result for 5 minutes
-    setCache(cacheKey, result);
-    return result;
-  },
+  };
+  
+  // Cache the result for 5 minutes
+  setCache(cacheKey, result);
+  return result;
+},
 
   // 2. Get product details with variants (GET /product/query)
   async getProductDetails(pid) {
@@ -427,14 +458,26 @@ export const cjClient = {
       return englishMatches >= 4 || ratio > 0.2;
     };
 
-    // Helper: Translate text to English using Google Translate API (free, no key needed)
-    // Includes retry logic, better error handling, and detailed logging
-    const translateToEnglish = async (text, maxRetries = 2) => {
-      if (!text || text.length < 3) return text;
-      
-      // Quick check: if already looks like English, skip translation
+    // Translate to English with caching (in-memory LRU + Postgres) and retries
+    const translateToEnglish = async (text, { pid, commentId, sourceHash }, maxRetries = 2) => {
+      if (!text || text.length < 3) return { text, detectedLang: null, fromCache: false };
+
+      // Quick check: if already looks like English, still cache it to avoid repeated checks
       if (isLikelyEnglish(text)) {
-        return text;
+        await saveCachedTranslation({
+          pid,
+          commentId,
+          sourceHash,
+          sourceText: text,
+          translatedText: text,
+          detectedLang: 'en'
+        });
+        return { text, detectedLang: 'en', fromCache: true };
+      }
+
+      const cached = await getCachedTranslation(pid, commentId, sourceHash);
+      if (cached) {
+        return { text: cached.translatedText, detectedLang: cached.detectedLang || null, fromCache: true };
       }
 
       let lastError = null;
@@ -442,14 +485,14 @@ export const cjClient = {
         try {
           const encodeText = encodeURIComponent(text);
           const translationUrl = `https://translate.googleapis.com/translate_a/single?client=gtx&sl=auto&tl=en&dt=t&q=${encodeText}`;
-          
+
           const translationResponse = await fetch(translationUrl, {
             headers: {
               'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
             },
             timeout: 5000 // 5 second timeout
           });
-          
+
           if (!translationResponse.ok) {
             lastError = `HTTP ${translationResponse.status}`;
             console.warn(`⚠️ Translation attempt ${attempt + 1}/${maxRetries + 1} failed (${lastError}) for: "${text.substring(0, 50)}..."`);
@@ -458,20 +501,30 @@ export const cjClient = {
               await sleep(200 * Math.pow(2, attempt));
               continue;
             }
-            return text; // Exhausted retries
+            return { text, detectedLang: null, fromCache: false }; // Exhausted retries
           }
 
           const translationData = await translationResponse.json();
-          
-          // Google Translate API response format: [[[translated_text, original_text, ...], ...], ...]
+
+          // Google Translate API response format: [[[translated_text, original_text, ...], ...], ...], detected_lang is index 2
+          const detectedLang = typeof translationData?.[2] === 'string' ? translationData[2] : null;
+
           if (translationData && Array.isArray(translationData) && translationData[0] && Array.isArray(translationData[0][0])) {
             const translated = translationData[0][0][0];
             if (translated && typeof translated === 'string' && translated.trim().length > 0) {
               console.log(`✅ Translation successful: "${text.substring(0, 35)}..." → "${translated.substring(0, 35)}..."`);
-              return translated;
+              await saveCachedTranslation({
+                pid,
+                commentId,
+                sourceHash,
+                sourceText: text,
+                translatedText: translated,
+                detectedLang
+              });
+              return { text: translated, detectedLang, fromCache: false };
             }
           }
-          
+
           // Response received but parsing failed
           lastError = 'Unexpected response format';
           console.warn(`⚠️ Translation attempt ${attempt + 1}/${maxRetries + 1} failed (${lastError}). Response: ${JSON.stringify(translationData).substring(0, 100)}`);
@@ -479,8 +532,8 @@ export const cjClient = {
             await sleep(200 * Math.pow(2, attempt));
             continue;
           }
-          return text; // Exhausted retries
-          
+          return { text, detectedLang: null, fromCache: false }; // Exhausted retries
+
         } catch (error) {
           lastError = error.message;
           console.warn(`⚠️ Translation attempt ${attempt + 1}/${maxRetries + 1} error: ${error.message}`);
@@ -489,12 +542,12 @@ export const cjClient = {
             await sleep(200 * Math.pow(2, attempt));
             continue;
           }
-          return text; // Exhausted retries, return original
+          return { text, detectedLang: null, fromCache: false }; // Exhausted retries, return original
         }
       }
-      
+
       console.error(`❌ Translation failed after ${maxRetries + 1} attempts. Last error: ${lastError}. Returning original text.`);
-      return text;
+      return { text, detectedLang: null, fromCache: false };
     };
 
     const normalized = await Promise.all(rawReviews.map(async (r, idx) => {
@@ -513,14 +566,22 @@ export const cjClient = {
         if (inMem) {
           comment = inMem;
         } else {
-          const dbCached = await getCachedTranslation(pid, commentId, comment);
+          const dbCached = await getCachedTranslation(pid, commentId, sourceHash);
           if (dbCached) {
             comment = dbCached.translatedText;
             lruSet(lruKey, comment);
           } else {
-            comment = await translateToEnglish(comment);
+            const translated = await translateToEnglish(comment, { pid, commentId, sourceHash });
+            comment = translated.text;
             // Persist successful translation for reuse
-            await saveTranslation(pid, commentId, originalComment, comment, null);
+            await saveCachedTranslation({
+              pid,
+              commentId,
+              sourceHash,
+              sourceText: originalComment,
+              translatedText: comment,
+              detectedLang: translated.detectedLang
+            });
             lruSet(lruKey, comment);
             // Small delay only when we hit the external service
             await sleep(100);
@@ -711,7 +772,6 @@ export const cjClient = {
   //   endCountryCode: 'ZA',
   //   postalCode: '2196', // optional
   //   products: [{ vid: 'V123', quantity: 2 }]
-  // }
   async getFreightQuote({ startCountryCode, endCountryCode, postalCode, products }) {
     const accessToken = await getAccessToken();
     const url = CJ_BASE_URL + '/logistic/freightCalculate';
@@ -832,5 +892,4 @@ export const cjClient = {
   }
 };
 
-// Default export for compatibility
 export default cjClient;
