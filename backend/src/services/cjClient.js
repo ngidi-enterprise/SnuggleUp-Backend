@@ -896,4 +896,5 @@ const cjClient = {
   }
 };
 
+export { cjClient };
 export default cjClient;
