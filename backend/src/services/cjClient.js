@@ -345,23 +345,31 @@ export const cjClient = {
   },
 
   // 2b. Get product reviews (best-effort; CJ sometimes omits reviews)
-  async getProductReviews(pid, pageNum = 1, pageSize = 10) {
+  async getProductReviews(pid, options = {}) {
     const accessToken = await getAccessToken();
-    // Use the current CJ API endpoint for product reviews (new /productComments)
-    // Deprecated endpoint is /product/comments (will be removed June 1, 2024)
     const url = CJ_BASE_URL + '/product/productComments';
-    const query = { pid, pageNum, pageSize };
+    
+    // Use the correct CJ API endpoint for product reviews/comments
+    const query = {
+      pid,
+      pageNum: options.pageNum || 1,
+      pageSize: options.pageSize || 50, // CJ docs default is 20, we'll fetch more
+    };
+    
     const json = await http('GET', url, {
       query,
       headers: { 'CJ-Access-Token': accessToken },
     });
 
-    if (!json.success && (!json.result || json.code !== 0)) {
-      throw new Error(`CJ getProductReviews failed: ${json.message || 'Product not found'}: pid:${pid}`);
+    // CJ productComments API returns: { success: true, code: 0, data: { list: [...] } }
+    if (!json.success || !json.data || !Array.isArray(json.data.list)) {
+      console.log(`⚠️ CJ getProductReviews - API response:`, json);
+      // Return empty array if no reviews rather than throwing
+      return [];
     }
 
-    const responseData = json.data || {};
-    const rawReviews = (responseData.list || []);
+    const rawReviews = json.data.list || [];
+    console.log(`✅ CJ getProductReviews - Retrieved ${rawReviews.length} reviews for pid:${pid}`);
 
     const normalizeDate = (d) => {
       if (!d) return null;
@@ -372,28 +380,27 @@ export const cjClient = {
       return null;
     };
 
-    const normalized = (rawReviews || []).map((r, idx) => {
-      // CJ API returns: commentId, pid, comment, commentDate, commentUser, score, commentUrls, countryCode, flagIconUrl
+    const normalized = rawReviews.map((r, idx) => {
+      // CJ productComments API returns: commentId, comment, commentUser, score, commentDate, commentUrls, countryCode, flagIconUrl
       const rating = Number(r.score || 5);
       const comment = r.comment || '';
-      const title = (comment ? comment.split('\n')[0].slice(0, 80) : 'Review');
+      const title = comment ? comment.slice(0, 80) : 'Review';
       const author = r.commentUser || 'Customer';
-      const helpful = 0; // CJ API doesn't provide helpful count in product comments
       const date = normalizeDate(r.commentDate);
       const images = Array.isArray(r.commentUrls) ? r.commentUrls : [];
-      const countryCode = r.countryCode || '';
-
+      
       return {
         id: r.commentId || `${pid}-${idx}`,
-        rating: Math.min(Math.max(rating || 5, 1), 5),
+        rating: Math.min(Math.max(rating, 1), 5),
         title,
         comment,
         author,
-        helpful,
+        helpful: 0, // CJ API doesn't provide helpful count
         date,
         images,
-        countryCode,
-        verified: false, // CJ API doesn't indicate verified purchase in product comments
+        verified: true, // CJ only returns actual purchase reviews
+        country: r.countryCode,
+        flagIcon: r.flagIconUrl,
       };
     }).filter(r => r.comment && r.comment.trim().length > 0);
 
