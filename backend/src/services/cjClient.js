@@ -1,6 +1,5 @@
 import crypto from 'crypto';
 import { pool } from '../db.js';
-import { getCachedTranslation, saveTranslation, hashText } from './reviewTranslationCache.js';
 
 // CJ Dropshipping API client (lightweight, pluggable for your credentials)
 // This implementation supports two modes:
@@ -88,7 +87,12 @@ function lruSet(key, value) {
   }
 }
 
-async function getCachedTranslation(pid, commentId, sourceHash) {
+// Local hash helper for caching keys
+function hashText(text) {
+  return crypto.createHash('sha256').update(text || '').digest('hex');
+}
+
+async function fetchCachedReviewTranslation(pid, commentId, sourceHash) {
   const key = translationCacheKey(pid, commentId, sourceHash);
   const mem = lruGet(key);
   if (mem) return mem;
@@ -112,7 +116,7 @@ async function getCachedTranslation(pid, commentId, sourceHash) {
   return null;
 }
 
-async function saveCachedTranslation({ pid, commentId, sourceHash, sourceText, translatedText, detectedLang }) {
+async function upsertCachedReviewTranslation({ pid, commentId, sourceHash, sourceText, translatedText, detectedLang }) {
   const key = translationCacheKey(pid, commentId, sourceHash);
   try {
     await pool.query(
@@ -464,7 +468,7 @@ const cjClient = {
 
       // Quick check: if already looks like English, still cache it to avoid repeated checks
       if (isLikelyEnglish(text)) {
-        await saveCachedTranslation({
+        await upsertCachedReviewTranslation({
           pid,
           commentId,
           sourceHash,
@@ -475,7 +479,7 @@ const cjClient = {
         return { text, detectedLang: 'en', fromCache: true };
       }
 
-      const cached = await getCachedTranslation(pid, commentId, sourceHash);
+      const cached = await fetchCachedReviewTranslation(pid, commentId, sourceHash);
       if (cached) {
         return { text: cached.translatedText, detectedLang: cached.detectedLang || null, fromCache: true };
       }
@@ -513,7 +517,7 @@ const cjClient = {
             const translated = translationData[0][0][0];
             if (translated && typeof translated === 'string' && translated.trim().length > 0) {
               console.log(`✅ Translation successful: "${text.substring(0, 35)}..." → "${translated.substring(0, 35)}..."`);
-              await saveCachedTranslation({
+              await upsertCachedReviewTranslation({
                 pid,
                 commentId,
                 sourceHash,
@@ -566,7 +570,7 @@ const cjClient = {
         if (inMem) {
           comment = inMem;
         } else {
-          const dbCached = await getCachedTranslation(pid, commentId, sourceHash);
+          const dbCached = await fetchCachedReviewTranslation(pid, commentId, sourceHash);
           if (dbCached) {
             comment = dbCached.translatedText;
             lruSet(lruKey, comment);
@@ -574,7 +578,7 @@ const cjClient = {
             const translated = await translateToEnglish(comment, { pid, commentId, sourceHash });
             comment = translated.text;
             // Persist successful translation for reuse
-            await saveCachedTranslation({
+            await upsertCachedReviewTranslation({
               pid,
               commentId,
               sourceHash,
