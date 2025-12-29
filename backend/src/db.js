@@ -238,6 +238,25 @@ async function initDb() {
   `);
 
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_carts_user_id ON carts(user_id);`);
+
+  // Cached translated product reviews (source hash to avoid re-translating unchanged reviews)
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS product_review_translations (
+      id SERIAL PRIMARY KEY,
+      pid TEXT NOT NULL,
+      comment_id TEXT NOT NULL,
+      source_hash TEXT NOT NULL,
+      source_text TEXT,
+      translated_text TEXT NOT NULL,
+      detected_lang TEXT,
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      UNIQUE(pid, comment_id, source_hash)
+    );
+  `);
+
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_review_translations_pid ON product_review_translations(pid);`);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_review_translations_comment ON product_review_translations(comment_id);`);
   
   console.log('✅ PostgreSQL database initialized successfully');
 }
