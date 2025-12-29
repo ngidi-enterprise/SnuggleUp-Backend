@@ -1,0 +1,324 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>CJ Reviews API Test</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 20px;
+            background: #f5f5f5;
+        }
+        .container {
+            background: white;
+            border-radius: 8px;
+            padding: 20px;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+        }
+        h1 {
+            color: #333;
+            margin-bottom: 10px;
+        }
+        .info {
+            background: #e3f2fd;
+            border-left: 4px solid #2196F3;
+            padding: 12px;
+            margin: 15px 0;
+            border-radius: 4px;
+        }
+        .test-section {
+            margin: 20px 0;
+            padding: 15px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+        }
+        .test-section h2 {
+            margin-top: 0;
+            color: #1976D2;
+        }
+        input[type="text"], input[type="number"] {
+            padding: 8px;
+            border: 1px solid #ccc;
+            border-radius: 4px;
+            width: 300px;
+            margin-right: 10px;
+        }
+        button {
+            background: #2196F3;
+            color: white;
+            border: none;
+            padding: 10px 20px;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 14px;
+        }
+        button:hover {
+            background: #1976D2;
+        }
+        .output {
+            background: #f9f9f9;
+            border: 1px solid #e0e0e0;
+            border-radius: 4px;
+            padding: 12px;
+            margin-top: 10px;
+            max-height: 400px;
+            overflow-y: auto;
+            font-family: 'Courier New', monospace;
+            font-size: 12px;
+            white-space: pre-wrap;
+            word-break: break-all;
+        }
+        .success {
+            background: #e8f5e9;
+            border-color: #4caf50;
+            color: #2e7d32;
+        }
+        .error {
+            background: #ffebee;
+            border-color: #f44336;
+            color: #c62828;
+        }
+        .review-card {
+            border: 1px solid #ddd;
+            padding: 12px;
+            margin: 10px 0;
+            border-radius: 4px;
+            background: #fafafa;
+        }
+        .stars {
+            color: #ffc107;
+            font-size: 16px;
+            margin-right: 8px;
+        }
+        .review-author {
+            font-weight: bold;
+            color: #333;
+            margin-bottom: 5px;
+        }
+        .review-date {
+            color: #999;
+            font-size: 12px;
+            margin-bottom: 8px;
+        }
+        .review-text {
+            color: #555;
+            line-height: 1.5;
+            margin: 8px 0;
+        }
+        .loading {
+            color: #2196F3;
+            font-style: italic;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🧪 CJ Product Reviews API Test</h1>
+        <div class="info">
+            <strong>Test PID:</strong> 2511190404421609900 (pet product example from SnuggleUp)<br>
+            <strong>Endpoint:</strong> GET /api/cj/products/:pid/reviews<br>
+            <strong>Backend API:</strong> Uses CJ's /product/productComments endpoint
+        </div>
+
+        <div class="test-section">
+            <h2>1. Test Backend Endpoint</h2>
+            <p>Tests your local backend API (should be running on http://localhost:3000)</p>
+            <div>
+                <label>Product ID (CJ PID):</label><br><br>
+                <input type="text" id="pidInput" value="2511190404421609900" placeholder="Enter CJ Product ID">
+                <button onclick="testBackendEndpoint()">Test Backend API</button>
+            </div>
+            <div id="backendOutput" class="output" style="display:none;"></div>
+        </div>
+
+        <div class="test-section">
+            <h2>2. Direct CJ API Test</h2>
+            <p>Tests the CJ API directly (requires valid CJ access token)</p>
+            <div>
+                <label>CJ Access Token:</label><br><br>
+                <input type="text" id="tokenInput" placeholder="Paste your CJ_ACCESS_TOKEN here" style="width: 500px;">
+                <button onclick="testCJAPI()">Test CJ API Direct</button>
+            </div>
+            <div id="cjOutput" class="output" style="display:none;"></div>
+        </div>
+
+        <div class="test-section">
+            <h2>3. Review Display Test</h2>
+            <div id="reviewsContainer"></div>
+        </div>
+    </div>
+
+    <script>
+        function showOutput(elementId, message, isError = false) {
+            const output = document.getElementById(elementId);
+            output.textContent = message;
+            output.className = `output ${isError ? 'error' : 'success'}`;
+            output.style.display = 'block';
+        }
+
+        async function testBackendEndpoint() {
+            const pid = document.getElementById('pidInput').value;
+            if (!pid) {
+                showOutput('backendOutput', 'Please enter a Product ID', true);
+                return;
+            }
+
+            showOutput('backendOutput', 'Testing backend endpoint...', false);
+            
+            try {
+                const response = await fetch(`http://localhost:3000/api/cj/products/${pid}/reviews`);
+                const data = await response.json();
+                
+                if (!response.ok) {
+                    showOutput('backendOutput', 
+                        `Backend Error (${response.status}):\n${JSON.stringify(data, null, 2)}`, true);
+                    return;
+                }
+
+                showOutput('backendOutput', 
+                    `✅ Backend API Success!\n\n${JSON.stringify(data, null, 2)}`);
+                
+                // Display reviews if available
+                if (data.reviews && data.reviews.length > 0) {
+                    displayReviews(data.reviews, pid);
+                }
+            } catch (error) {
+                showOutput('backendOutput', 
+                    `❌ Error calling backend:\n${error.message}\n\nMake sure backend is running on http://localhost:3000`, true);
+            }
+        }
+
+        async function testCJAPI() {
+            const token = document.getElementById('tokenInput').value;
+            const pid = document.getElementById('pidInput').value;
+            
+            if (!token) {
+                showOutput('cjOutput', 'Please paste your CJ_ACCESS_TOKEN', true);
+                return;
+            }
+            if (!pid) {
+                showOutput('cjOutput', 'Please enter a Product ID', true);
+                return;
+            }
+
+            showOutput('cjOutput', 'Testing CJ API directly...', false);
+            
+            try {
+                const url = new URL('https://developers.cjdropshipping.com/api2.0/v1/product/productComments');
+                url.searchParams.set('pid', pid);
+                url.searchParams.set('pageNum', '1');
+                url.searchParams.set('pageSize', '50');
+
+                const response = await fetch(url, {
+                    headers: {
+                        'CJ-Access-Token': token,
+                    }
+                });
+                const data = await response.json();
+                
+                if (!response.ok || !data.success) {
+                    showOutput('cjOutput', 
+                        `❌ CJ API Error:\n${JSON.stringify(data, null, 2)}`, true);
+                    return;
+                }
+
+                showOutput('cjOutput', 
+                    `✅ CJ API Success!\n\nTotal Reviews: ${data.data?.total || 0}\n\n${JSON.stringify(data, null, 2)}`);
+                
+                // Display reviews if available
+                if (data.data?.list && data.data.list.length > 0) {
+                    displayReviews(data.data.list, pid, true);
+                }
+            } catch (error) {
+                showOutput('cjOutput', 
+                    `❌ Error:\n${error.message}`, true);
+            }
+        }
+
+        function displayReviews(reviews, pid, isRaw = false) {
+            const container = document.getElementById('reviewsContainer');
+            container.innerHTML = '';
+            
+            if (!reviews || reviews.length === 0) {
+                container.innerHTML = '<p style="color: #999;">No reviews found for this product.</p>';
+                return;
+            }
+
+            const title = document.createElement('h3');
+            title.textContent = `📝 Reviews (${reviews.length} total)`;
+            container.appendChild(title);
+
+            reviews.slice(0, 5).forEach((review, idx) => {
+                const card = document.createElement('div');
+                card.className = 'review-card';
+                
+                // Handle both normalized (from backend) and raw (from CJ API) formats
+                const rating = review.rating || review.score || 5;
+                const author = review.author || review.commentUser || 'Customer';
+                const comment = review.comment || '';
+                const date = review.date || review.commentDate || 'No date';
+                const images = review.images || review.commentUrls || [];
+                
+                const stars = '⭐'.repeat(Math.min(Math.max(Math.round(rating), 1), 5));
+                
+                let content = `<div class="review-author">${stars} ${author}</div>`;
+                content += `<div class="review-date">${new Date(date).toLocaleDateString()}</div>`;
+                content += `<div class="review-text">${escapeHtml(comment)}</div>`;
+                
+                if (images && images.length > 0) {
+                    content += '<div style="margin-top: 8px;">';
+                    images.slice(0, 3).forEach(img => {
+                        content += `<a href="${img}" target="_blank" style="display: inline-block; margin-right: 8px;">📷 View Image</a>`;
+                    });
+                    content += '</div>';
+                }
+                
+                card.innerHTML = content;
+                container.appendChild(card);
+            });
+
+            if (reviews.length > 5) {
+                const more = document.createElement('p');
+                more.textContent = `... and ${reviews.length - 5} more reviews`;
+                more.style.color = '#999';
+                more.style.fontStyle = 'italic';
+                container.appendChild(more);
+            }
+        }
+
+        function escapeHtml(text) {
+            const map = {
+                '&': '&amp;',
+                '<': '&lt;',
+                '>': '&gt;',
+                '"': '&quot;',
+                "'": '&#039;'
+            };
+            return text.replace(/[&<>"']/g, m => map[m]);
+        }
+
+        // Auto-test backend on page load if it's available
+        window.addEventListener('load', () => {
+            setTimeout(() => {
+                console.log('Attempting automatic backend test...');
+                fetch('http://localhost:3000/api/cj/products/2511190404421609900/reviews')
+                    .then(r => r.json())
+                    .then(data => {
+                        if (data.reviews) {
+                            showOutput('backendOutput', 
+                                `✅ Backend is running!\n\n${JSON.stringify(data, null, 2)}`);
+                            displayReviews(data.reviews, '2511190404421609900');
+                        }
+                    })
+                    .catch(() => {
+                        document.getElementById('backendOutput').innerHTML = 
+                            '<p style="color: #999; font-style: italic;">Backend not running on localhost:3000 yet. Click "Test Backend API" to try.</p>';
+                    });
+            }, 500);
+        });
+    </script>
+</body>
+</html>
