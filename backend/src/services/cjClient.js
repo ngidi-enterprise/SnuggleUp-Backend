@@ -1,4 +1,5 @@
 import crypto from 'crypto';
+import { getCachedTranslation, saveTranslation, hashText } from './reviewTranslationCache.js';
 
 // CJ Dropshipping API client (lightweight, pluggable for your credentials)
 // This implementation supports two modes:
@@ -23,6 +24,27 @@ let cjTokenCache = {
 // Simple search cache to reduce duplicate API calls (5 minute TTL)
 const searchCache = new Map();
 const SEARCH_CACHE_TTL = 5 * 60 * 1000; // 5 minutes
+
+// Small in-memory LRU to avoid repeat translations during a process lifetime
+const translationLru = new Map();
+const TRANSLATION_LRU_LIMIT = 300;
+
+function lruGet(key) {
+  if (!translationLru.has(key)) return null;
+  const value = translationLru.get(key);
+  translationLru.delete(key);
+  translationLru.set(key, value);
+  return value;
+}
+
+function lruSet(key, value) {
+  if (translationLru.has(key)) translationLru.delete(key);
+  translationLru.set(key, value);
+  if (translationLru.size > TRANSLATION_LRU_LIMIT) {
+    const oldestKey = translationLru.keys().next().value;
+    translationLru.delete(oldestKey);
+  }
+}
 
 function getCacheKey(params) {
   return JSON.stringify(params);
@@ -479,12 +501,31 @@ export const cjClient = {
       // CJ productComments API returns: commentId, comment, commentUser, score, commentDate, commentUrls, countryCode, flagIconUrl
       const rating = Number(r.score || 5);
       let comment = r.comment || '';
-      
-      // Translate comment to English if needed (add small delay to avoid rate limiting)
+      const commentId = r.commentId || `${pid}-${idx}`;
+      const originalComment = comment;
+
+      // Translate comment to English with cache (in-memory LRU + Postgres)
       if (comment.length > 0) {
-        comment = await translateToEnglish(comment);
-        // Small delay between translation requests to avoid overwhelming the API
-        await sleep(100);
+        const sourceHash = hashText(comment);
+        const lruKey = `${pid}:${commentId}:${sourceHash}`;
+
+        const inMem = lruGet(lruKey);
+        if (inMem) {
+          comment = inMem;
+        } else {
+          const dbCached = await getCachedTranslation(pid, commentId, comment);
+          if (dbCached) {
+            comment = dbCached.translatedText;
+            lruSet(lruKey, comment);
+          } else {
+            comment = await translateToEnglish(comment);
+            // Persist successful translation for reuse
+            await saveTranslation(pid, commentId, originalComment, comment, null);
+            lruSet(lruKey, comment);
+            // Small delay only when we hit the external service
+            await sleep(100);
+          }
+        }
       }
       
       const title = comment ? comment.slice(0, 80) : 'Review';
@@ -493,7 +534,7 @@ export const cjClient = {
       const images = Array.isArray(r.commentUrls) ? r.commentUrls : [];
       
       return {
-        id: r.commentId || `${pid}-${idx}`,
+        id: commentId,
         rating: Math.min(Math.max(rating, 1), 5),
         title,
         comment,
