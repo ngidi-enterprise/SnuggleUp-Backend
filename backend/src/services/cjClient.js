@@ -380,19 +380,34 @@ export const cjClient = {
       return null;
     };
 
-    // Helper: Detect if text is likely English (simple heuristic)
+    // Helper: Detect if text is likely English (improved heuristic)
     const isLikelyEnglish = (text) => {
-      if (!text) return false;
-      // Common English words (checking for presence of these makes it likely English)
-      const englishWords = ['the', 'a', 'is', 'and', 'to', 'of', 'in', 'for', 'it', 'was', 'very', 'good', 'great', 'product', 'love', 'perfect'];
+      if (!text || text.length < 5) return false;
+      
+      // Extended list of common English words
+      const englishWords = [
+        'the', 'a', 'is', 'and', 'to', 'of', 'in', 'for', 'it', 'was', 'very', 'good', 'great', 
+        'product', 'love', 'perfect', 'excellent', 'amazing', 'wonderful', 'best', 'like', 'nice',
+        'really', 'so', 'well', 'are', 'have', 'had', 'been', 'be', 'this', 'that', 'with',
+        'would', 'could', 'should', 'from', 'an', 'or', 'but', 'on', 'at', 'by', 'as', 'get',
+        'got', 'has', 'want', 'just', 'all', 'not', 'no', 'yes', 'ok', 'okay', 'received', 'delivery'
+      ];
+      
       const lowerText = text.toLowerCase();
-      const matches = englishWords.filter(word => lowerText.includes(word)).length;
-      // If 3+ common English words found, probably English
-      return matches >= 3;
+      const wordList = lowerText.match(/\b[a-z]+\b/g) || [];
+      
+      // Count how many English words appear in the text
+      const englishMatches = wordList.filter(word => englishWords.includes(word)).length;
+      
+      // If more than 20% of words are common English words, likely English
+      // Or if we find 4+ English words regardless of total count
+      const ratio = wordList.length > 0 ? englishMatches / wordList.length : 0;
+      return englishMatches >= 4 || ratio > 0.2;
     };
 
     // Helper: Translate text to English using Google Translate API (free, no key needed)
-    const translateToEnglish = async (text) => {
+    // Includes retry logic, better error handling, and detailed logging
+    const translateToEnglish = async (text, maxRetries = 2) => {
       if (!text || text.length < 3) return text;
       
       // Quick check: if already looks like English, skip translation
@@ -400,51 +415,64 @@ export const cjClient = {
         return text;
       }
 
-      try {
-        // Use Google Translate API endpoint (free, no auth required)
-        const encodeText = encodeURIComponent(text);
-        const translateUrl = `https://translate.googleapis.com/translate_a/element.js?cb=googleTranslateElementInit`;
-        
-        // Actually, use simpler approach: Google's free translate endpoint
-        const response = await fetch('https://translate.googleapis.com/translate_a/single', {
-          method: 'GET',
-          headers: {
-            'User-Agent': 'Mozilla/5.0'
-          },
-          // Query params: text to translate, source auto-detect, target English
-        });
-
-        // Actually, the simplest approach is using the Google Translate API via a simple HTTP call
-        // Let's use a more reliable method: Google Translate via simple URL
-        const translationUrl = `https://translate.googleapis.com/translate_a/single?client=gtx&sl=auto&tl=en&dt=t&q=${encodeText}`;
-        
-        const translationResponse = await fetch(translationUrl, {
-          headers: {
-            'User-Agent': 'Mozilla/5.0'
+      let lastError = null;
+      for (let attempt = 0; attempt <= maxRetries; attempt++) {
+        try {
+          const encodeText = encodeURIComponent(text);
+          const translationUrl = `https://translate.googleapis.com/translate_a/single?client=gtx&sl=auto&tl=en&dt=t&q=${encodeText}`;
+          
+          const translationResponse = await fetch(translationUrl, {
+            headers: {
+              'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+            },
+            timeout: 5000 // 5 second timeout
+          });
+          
+          if (!translationResponse.ok) {
+            lastError = `HTTP ${translationResponse.status}`;
+            console.warn(`⚠️ Translation attempt ${attempt + 1}/${maxRetries + 1} failed (${lastError}) for: "${text.substring(0, 50)}..."`);
+            if (attempt < maxRetries) {
+              // Exponential backoff: 200ms, 400ms, 800ms...
+              await sleep(200 * Math.pow(2, attempt));
+              continue;
+            }
+            return text; // Exhausted retries
           }
-        });
-        
-        if (!translationResponse.ok) {
-          console.warn(`⚠️ Translation failed for: "${text.substring(0, 50)}..."`);
-          return text; // Return original if translation fails
-        }
 
-        const translationData = await translationResponse.json();
-        
-        // Google Translate API response format: [[[translated_text, original_text, ...], ...], ...]
-        if (translationData && Array.isArray(translationData) && translationData[0]) {
-          const translated = translationData[0][0]?.[0];
-          if (translated) {
-            console.log(`🌍 Translated: "${text.substring(0, 40)}..." → "${translated.substring(0, 40)}..."`);
-            return translated;
+          const translationData = await translationResponse.json();
+          
+          // Google Translate API response format: [[[translated_text, original_text, ...], ...], ...]
+          if (translationData && Array.isArray(translationData) && translationData[0] && Array.isArray(translationData[0][0])) {
+            const translated = translationData[0][0][0];
+            if (translated && typeof translated === 'string' && translated.trim().length > 0) {
+              console.log(`✅ Translation successful: "${text.substring(0, 35)}..." → "${translated.substring(0, 35)}..."`);
+              return translated;
+            }
           }
+          
+          // Response received but parsing failed
+          lastError = 'Unexpected response format';
+          console.warn(`⚠️ Translation attempt ${attempt + 1}/${maxRetries + 1} failed (${lastError}). Response: ${JSON.stringify(translationData).substring(0, 100)}`);
+          if (attempt < maxRetries) {
+            await sleep(200 * Math.pow(2, attempt));
+            continue;
+          }
+          return text; // Exhausted retries
+          
+        } catch (error) {
+          lastError = error.message;
+          console.warn(`⚠️ Translation attempt ${attempt + 1}/${maxRetries + 1} error: ${error.message}`);
+          if (attempt < maxRetries) {
+            // Exponential backoff on error
+            await sleep(200 * Math.pow(2, attempt));
+            continue;
+          }
+          return text; // Exhausted retries, return original
         }
-        
-        return text; // Return original if parsing fails
-      } catch (error) {
-        console.warn(`⚠️ Translation error: ${error.message}`);
-        return text; // Return original on error
       }
+      
+      console.error(`❌ Translation failed after ${maxRetries + 1} attempts. Last error: ${lastError}. Returning original text.`);
+      return text;
     };
 
     const normalized = await Promise.all(rawReviews.map(async (r, idx) => {
