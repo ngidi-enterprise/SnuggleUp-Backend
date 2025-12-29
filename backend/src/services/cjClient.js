@@ -344,6 +344,90 @@ export const cjClient = {
     };
   },
 
+  // 2b. Get product reviews (best-effort; CJ sometimes omits reviews)
+  async getProductReviews(pid) {
+    const accessToken = await getAccessToken();
+    const url = CJ_BASE_URL + '/product/query';
+    const query = { pid };
+    const json = await http('GET', url, {
+      query,
+      headers: { 'CJ-Access-Token': accessToken },
+    });
+
+    if (!json.result || !json.data) {
+      throw new Error(`CJ getProductReviews failed: ${json.message || 'Product not found'}: pid:${pid}`);
+    }
+
+    const product = json.data || {};
+
+    // CJ does not document reviews well; try common shapes
+    const candidateLists = [
+      product.productReviews,
+      product.reviews,
+      product.reviewList,
+      product.commentList,
+      product.productCommentList,
+      product.productReviews?.list,
+      product.productReviews?.data,
+      product.commentList?.list,
+      product.commentList?.data,
+    ];
+
+    let rawReviews = [];
+    for (const list of candidateLists) {
+      if (Array.isArray(list)) {
+        rawReviews = list;
+        break;
+      }
+      if (list && Array.isArray(list.items)) {
+        rawReviews = list.items;
+        break;
+      }
+      if (list && Array.isArray(list.list)) {
+        rawReviews = list.list;
+        break;
+      }
+      if (list && Array.isArray(list.data)) {
+        rawReviews = list.data;
+        break;
+      }
+    }
+
+    const normalizeDate = (d) => {
+      if (!d) return null;
+      try {
+        const dt = new Date(d);
+        if (!isNaN(dt.getTime())) return dt.toISOString();
+      } catch (_) {}
+      return null;
+    };
+
+    const normalized = (rawReviews || []).map((r, idx) => {
+      const rating = Number(r.rating ?? r.starLevel ?? r.score ?? r.star ?? r.rate ?? 5);
+      const comment = r.comment || r.content || r.reviewContent || r.message || '';
+      const title = r.title || r.subject || (comment ? comment.slice(0, 80) : 'Review');
+      const author = r.customerName || r.nickname || r.userName || r.buyerName || 'Customer';
+      const helpful = Number(r.helpful ?? r.likeNum ?? r.helpfulCount ?? r.usefulCount ?? 0) || 0;
+      const date = normalizeDate(r.createTime || r.createdAt || r.addTime || r.time || r.reviewDate);
+      const images = Array.isArray(r.images)
+        ? r.images
+        : (typeof r.imageUrls === 'string' ? r.imageUrls.split(',').map(s => s.trim()).filter(Boolean) : []);
+      return {
+        id: r.id || r.reviewId || r.commentId || `${pid}-${idx}`,
+        rating: Math.min(Math.max(rating || 5, 1), 5),
+        title,
+        comment,
+        author,
+        helpful,
+        date,
+        images,
+        verified: Boolean(r.isVerified || r.verifiedPurchase || r.isBuyer || false),
+      };
+    }).filter(r => r.comment && r.comment.trim().length > 0);
+
+    return normalized;
+  },
+
   // 3. Check inventory for a variant (GET /product/stock/queryByVid)
   async getInventory(vid) {
     const accessToken = await getAccessToken();
