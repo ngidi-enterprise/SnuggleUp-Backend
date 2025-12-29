@@ -380,10 +380,85 @@ export const cjClient = {
       return null;
     };
 
-    const normalized = rawReviews.map((r, idx) => {
+    // Helper: Detect if text is likely English (simple heuristic)
+    const isLikelyEnglish = (text) => {
+      if (!text) return false;
+      // Common English words (checking for presence of these makes it likely English)
+      const englishWords = ['the', 'a', 'is', 'and', 'to', 'of', 'in', 'for', 'it', 'was', 'very', 'good', 'great', 'product', 'love', 'perfect'];
+      const lowerText = text.toLowerCase();
+      const matches = englishWords.filter(word => lowerText.includes(word)).length;
+      // If 3+ common English words found, probably English
+      return matches >= 3;
+    };
+
+    // Helper: Translate text to English using Google Translate API (free, no key needed)
+    const translateToEnglish = async (text) => {
+      if (!text || text.length < 3) return text;
+      
+      // Quick check: if already looks like English, skip translation
+      if (isLikelyEnglish(text)) {
+        return text;
+      }
+
+      try {
+        // Use Google Translate API endpoint (free, no auth required)
+        const encodeText = encodeURIComponent(text);
+        const translateUrl = `https://translate.googleapis.com/translate_a/element.js?cb=googleTranslateElementInit`;
+        
+        // Actually, use simpler approach: Google's free translate endpoint
+        const response = await fetch('https://translate.googleapis.com/translate_a/single', {
+          method: 'GET',
+          headers: {
+            'User-Agent': 'Mozilla/5.0'
+          },
+          // Query params: text to translate, source auto-detect, target English
+        });
+
+        // Actually, the simplest approach is using the Google Translate API via a simple HTTP call
+        // Let's use a more reliable method: Google Translate via simple URL
+        const translationUrl = `https://translate.googleapis.com/translate_a/single?client=gtx&sl=auto&tl=en&dt=t&q=${encodeText}`;
+        
+        const translationResponse = await fetch(translationUrl, {
+          headers: {
+            'User-Agent': 'Mozilla/5.0'
+          }
+        });
+        
+        if (!translationResponse.ok) {
+          console.warn(`⚠️ Translation failed for: "${text.substring(0, 50)}..."`);
+          return text; // Return original if translation fails
+        }
+
+        const translationData = await translationResponse.json();
+        
+        // Google Translate API response format: [[[translated_text, original_text, ...], ...], ...]
+        if (translationData && Array.isArray(translationData) && translationData[0]) {
+          const translated = translationData[0][0]?.[0];
+          if (translated) {
+            console.log(`🌍 Translated: "${text.substring(0, 40)}..." → "${translated.substring(0, 40)}..."`);
+            return translated;
+          }
+        }
+        
+        return text; // Return original if parsing fails
+      } catch (error) {
+        console.warn(`⚠️ Translation error: ${error.message}`);
+        return text; // Return original on error
+      }
+    };
+
+    const normalized = await Promise.all(rawReviews.map(async (r, idx) => {
       // CJ productComments API returns: commentId, comment, commentUser, score, commentDate, commentUrls, countryCode, flagIconUrl
       const rating = Number(r.score || 5);
-      const comment = r.comment || '';
+      let comment = r.comment || '';
+      
+      // Translate comment to English if needed (add small delay to avoid rate limiting)
+      if (comment.length > 0) {
+        comment = await translateToEnglish(comment);
+        // Small delay between translation requests to avoid overwhelming the API
+        await sleep(100);
+      }
+      
       const title = comment ? comment.slice(0, 80) : 'Review';
       const author = r.commentUser || 'Customer';
       const date = normalizeDate(r.commentDate);
@@ -402,7 +477,7 @@ export const cjClient = {
         country: r.countryCode,
         flagIcon: r.flagIconUrl,
       };
-    }).filter(r => r.comment && r.comment.trim().length > 0);
+    })).then(reviews => reviews.filter(r => r.comment && r.comment.trim().length > 0));
 
     return normalized;
   },
