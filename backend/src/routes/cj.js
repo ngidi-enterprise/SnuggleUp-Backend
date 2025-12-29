@@ -42,6 +42,19 @@ router.get('/products', optionalAuth, async (req, res) => {
   }
 });
 
+// 1b. Get product reviews (public)
+// GET /api/cj/products/:pid/reviews
+router.get('/products/:pid/reviews', optionalAuth, async (req, res) => {
+  try {
+    const { pid } = req.params;
+    const reviews = await cjClient.getProductReviews(pid);
+    res.json({ pid, source: 'cj', count: reviews.length, reviews });
+  } catch (err) {
+    console.error('CJ product reviews error:', err);
+    res.status(502).json({ error: 'CJ product reviews failed', details: err.message });
+  }
+});
+
 // 2. Get product details with variants
 // GET /api/cj/products/:pid
 router.get('/products/:pid', optionalAuth, async (req, res) => {
