@@ -73,6 +73,52 @@ export const authenticateToken = async (req, res, next) => {
   }
 };
 
+// Optional auth: if a valid token is provided, populate req.user; otherwise continue anonymous
+export const optionalAuth = async (req, res, next) => {
+  const authHeader = req.headers['authorization'];
+  const token = authHeader && authHeader.split(' ')[1];
+
+  if (!token) {
+    return next();
+  }
+
+  try {
+    // Try RS256 via JWKS
+    const { payload } = await jwtVerify(token, getJwks(), {
+      algorithms: ['RS256'],
+      issuer: undefined,
+      audience: undefined
+    });
+    const meta = payload.user_metadata || payload.userMeta || {};
+    const nameClaim = meta.full_name || meta.name || payload.name || payload.nickname || null;
+    req.user = { userId: payload.sub, email: payload.email, name: nameClaim, supabaseUser: true };
+    return next();
+  } catch (_) {
+    // continue to HS256/app JWT paths
+  }
+
+  if (SUPABASE_JWT_SECRET) {
+    try {
+      const decoded = jwt.verify(token, SUPABASE_JWT_SECRET, { algorithms: ['HS256'] });
+      const meta = decoded.user_metadata || decoded.userMeta || {};
+      const nameClaim = meta.full_name || meta.name || decoded.name || decoded.nickname || null;
+      req.user = { userId: decoded.sub, email: decoded.email, name: nameClaim, supabaseUser: true };
+      return next();
+    } catch (_) {
+      // continue to app JWT path
+    }
+  }
+
+  try {
+    const user = jwt.verify(token, JWT_SECRET);
+    req.user = user; // { userId, email }
+    return next();
+  } catch (_) {
+    // If token invalid, just proceed unauthenticated
+    return next();
+  }
+};
+
 export const generateToken = (userId, email) => {
   return jwt.sign(
     { userId, email },
