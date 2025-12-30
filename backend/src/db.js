@@ -257,6 +257,27 @@ async function initDb() {
 
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_review_translations_pid ON product_review_translations(pid);`);
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_review_translations_comment ON product_review_translations(comment_id);`);
+
+  // Customer reviews - user-submitted reviews for purchased products
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS customer_reviews (
+      id SERIAL PRIMARY KEY,
+      user_id TEXT NOT NULL,
+      product_id TEXT NOT NULL,
+      order_id INTEGER NOT NULL,
+      rating INTEGER NOT NULL CHECK (rating >= 1 AND rating <= 5),
+      title TEXT,
+      comment TEXT NOT NULL,
+      verified_purchase BOOLEAN DEFAULT TRUE,
+      helpful_count INTEGER DEFAULT 0,
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      UNIQUE(user_id, product_id, order_id)
+    );
+  `);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_customer_reviews_user ON customer_reviews(user_id);`);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_customer_reviews_product ON customer_reviews(product_id);`);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_customer_reviews_order ON customer_reviews(order_id);`);
   
   console.log('✅ PostgreSQL database initialized successfully');
 }

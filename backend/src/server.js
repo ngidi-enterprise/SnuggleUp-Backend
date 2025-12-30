@@ -11,6 +11,7 @@ import { router as productsRouter } from './routes/products.js';
 import { router as cartRouter } from './routes/cart.js';
 import { router as ordersRouter } from './routes/orders.js';
 import { router as shippingRouter } from './routes/shipping.js';
+import { router as reviewsRouter } from './routes/reviews.js';
 import { cjClient } from './services/cjClient.js';
 import { syncCuratedInventory } from './services/inventorySync.js';
 import { syncProductPrices } from './services/priceSync.js';
@@ -57,6 +58,7 @@ app.use('/api/products', productsRouter); // Public curated products
 app.use('/api/cart', cartRouter); // Cart persistence
 app.use('/api/orders', ordersRouter); // Order history
 app.use('/api/shipping', shippingRouter); // Shipping quotes
+app.use('/api/reviews', reviewsRouter); // Customer reviews
 
 // Health check (legacy)
 app.get('/health', (req, res) => {
