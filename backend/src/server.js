@@ -50,16 +50,18 @@ app.use(cors({
     
     // Check exact matches
     if (allowedOrigins.includes(origin)) {
+      console.log('✅ CORS allowed (exact):', origin);
       return callback(null, true);
     }
     
     // Check pattern matches
     if (allowedPatterns.some(pattern => pattern.test(origin))) {
+      console.log('✅ CORS allowed (pattern):', origin);
       return callback(null, true);
     }
     
     console.log('⚠️ CORS blocked origin:', origin);
-    callback(null, false);
+    callback(new Error('Not allowed by CORS'));
   },
   credentials: true,
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
