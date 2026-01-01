@@ -65,7 +65,10 @@ app.use(cors({
   },
   credentials: true,
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization', 'CJ-Access-Token']
+  allowedHeaders: ['Content-Type', 'Authorization', 'CJ-Access-Token'],
+  exposedHeaders: ['Content-Type', 'Authorization'],
+  preflightContinue: false,
+  optionsSuccessStatus: 204
 }));
 // Parse URL-encoded form bodies (required for PayFast IPN)
 app.use(express.urlencoded({ extended: false }));
