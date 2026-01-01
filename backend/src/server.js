@@ -30,16 +30,37 @@ const port = process.env.PORT || 3000;
 
 // Middleware - CORS configuration
 app.use(cors({
-  origin: [
-    'http://localhost:5173',
-    'http://127.0.0.1:5173',
-    'https://snuggleup.co.za',
-    'https://www.snuggleup.co.za',
-    'https://api.snuggleup.co.za',
-    /\.onrender\.com$/,
-    /\.webcontainer\.io$/,
-    /\.local$/
-  ],
+  origin: function(origin, callback) {
+    // Allow requests with no origin (like mobile apps, curl, Postman)
+    if (!origin) return callback(null, true);
+    
+    const allowedOrigins = [
+      'http://localhost:5173',
+      'http://127.0.0.1:5173',
+      'https://snuggleup.co.za',
+      'https://www.snuggleup.co.za',
+      'https://api.snuggleup.co.za'
+    ];
+    
+    const allowedPatterns = [
+      /\.onrender\.com$/,
+      /\.webcontainer\.io$/,
+      /\.local$/
+    ];
+    
+    // Check exact matches
+    if (allowedOrigins.includes(origin)) {
+      return callback(null, true);
+    }
+    
+    // Check pattern matches
+    if (allowedPatterns.some(pattern => pattern.test(origin))) {
+      return callback(null, true);
+    }
+    
+    console.log('⚠️ CORS blocked origin:', origin);
+    callback(null, false);
+  },
   credentials: true,
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization', 'CJ-Access-Token']
