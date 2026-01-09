@@ -278,6 +278,31 @@ async function initDb() {
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_customer_reviews_user ON customer_reviews(user_id);`);
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_customer_reviews_product ON customer_reviews(product_id);`);
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_customer_reviews_order ON customer_reviews(order_id);`);
+
+  // Local warehouse products - manually added inventory
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS local_products (
+      id SERIAL PRIMARY KEY,
+      name TEXT NOT NULL,
+      description TEXT,
+      price DECIMAL(10,2) NOT NULL,
+      compare_at_price DECIMAL(10,2),
+      stock_quantity INTEGER NOT NULL DEFAULT 0,
+      sku TEXT UNIQUE,
+      category TEXT DEFAULT 'General',
+      tags TEXT[] DEFAULT '{}',
+      images TEXT[] DEFAULT '{}',
+      weight_kg DECIMAL(8,2),
+      dimensions JSONB,
+      is_featured BOOLEAN DEFAULT FALSE,
+      is_active BOOLEAN DEFAULT TRUE,
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    );
+  `);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_local_products_category ON local_products(category);`);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_local_products_sku ON local_products(sku);`);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_local_products_active ON local_products(is_active);`);
   
   console.log('✅ PostgreSQL database initialized successfully');
 }
