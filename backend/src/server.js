@@ -72,9 +72,9 @@ app.use(cors({
   optionsSuccessStatus: 204
 }));
 // Parse URL-encoded form bodies (required for PayFast IPN)
-app.use(express.urlencoded({ extended: false }));
-// Parse JSON bodies
-app.use(express.json());
+app.use(express.urlencoded({ extended: false, limit: '50mb' }));
+// Parse JSON bodies (increased limit for base64 images)
+app.use(express.json({ limit: '50mb' }));
 
 // Routes
 app.use('/api/payments', paymentsRouter);
