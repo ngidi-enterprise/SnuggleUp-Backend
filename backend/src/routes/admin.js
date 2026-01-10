@@ -6,6 +6,7 @@ import { getRuntimeConfig, setShippingFallbackEnabled, isShippingFallbackEnabled
 import { generateSEOTitles } from '../services/seoTitleGenerator.js';
 import { getOrderById, buildCJOrderData, updateOrderCJInfo } from './orders.js';
 import { getSchedulerHealth, generateSchedulerReport, getExecutionHistory } from '../services/schedulerMonitor.js';
+import crypto from 'crypto';
 
 export const router = express.Router();
 
@@ -128,6 +129,48 @@ router.get('/pricing-config', async (req, res) => {
     priceMarkup: PRICE_MARKUP,
     source: 'db',
   });
+});
+
+// ======== Cloudinary Upload Signature ========
+// Returns a short-lived signature so the frontend can upload files
+// directly to Cloudinary without sending large payloads to our backend.
+// Admin-only as it uses backend secrets.
+router.post('/upload-signature', (req, res) => {
+  try {
+    const cloudName = process.env.CLOUDINARY_CLOUD_NAME;
+    const apiKey = process.env.CLOUDINARY_API_KEY;
+    const apiSecret = process.env.CLOUDINARY_API_SECRET;
+
+    if (!cloudName || !apiKey || !apiSecret) {
+      return res.status(500).json({
+        error: 'Cloudinary env not configured',
+        required: ['CLOUDINARY_CLOUD_NAME', 'CLOUDINARY_API_KEY', 'CLOUDINARY_API_SECRET']
+      });
+    }
+
+    const rawFolder = (req.body && req.body.folder) ? String(req.body.folder) : 'uploads';
+    const folder = `snuggleup/${rawFolder}`; // namespace under project
+    const timestamp = Math.floor(Date.now() / 1000);
+
+    // Cloudinary signature is sha1 of the param string + secret.
+    // Only sign what Cloudinary expects: sorted params.
+    const toSign = `folder=${folder}&timestamp=${timestamp}`;
+    const signature = crypto
+      .createHash('sha1')
+      .update(toSign + apiSecret)
+      .digest('hex');
+
+    res.json({
+      signature,
+      timestamp,
+      folder,
+      cloudName,
+      apiKey
+    });
+  } catch (e) {
+    console.error('Failed to create Cloudinary signature:', e);
+    res.status(500).json({ error: 'Failed to create signature' });
+  }
 });
 
 // Runtime config: read current flags
