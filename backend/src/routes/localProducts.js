@@ -1,24 +1,9 @@
 import express from 'express';
 import { pool } from '../db.js';
 import { authenticateToken } from '../middleware/auth.js';
+import { requireAdmin } from '../middleware/admin.js';
 
 export const router = express.Router();
-
-// Middleware to check admin role
-const requireAdmin = async (req, res, next) => {
-  try {
-    const result = await pool.query(
-      'SELECT role FROM users WHERE id = $1',
-      [req.user.userId]
-    );
-    if (result.rows[0]?.role === 'admin') {
-      return next();
-    }
-    res.status(403).json({ error: 'Admin access required' });
-  } catch (error) {
-    res.status(500).json({ error: 'Authorization check failed' });
-  }
-};
 
 // Get all local products (public)
 router.get('/', async (req, res) => {
@@ -82,7 +67,7 @@ router.get('/:id', async (req, res) => {
 });
 
 // Create local product (admin only)
-router.post('/', authenticateToken, requireAdmin, async (req, res) => {
+router.post('/', requireAdmin, async (req, res) => {
   try {
     const {
       name, description, price, compare_at_price,
@@ -118,7 +103,7 @@ router.post('/', authenticateToken, requireAdmin, async (req, res) => {
 });
 
 // Update local product (admin only)
-router.put('/:id', authenticateToken, requireAdmin, async (req, res) => {
+router.put('/:id', requireAdmin, async (req, res) => {
   try {
     const { id } = req.params;
     const {
@@ -166,7 +151,7 @@ router.put('/:id', authenticateToken, requireAdmin, async (req, res) => {
 });
 
 // Delete local product (admin only - soft delete)
-router.delete('/:id', authenticateToken, requireAdmin, async (req, res) => {
+router.delete('/:id', requireAdmin, async (req, res) => {
   try {
     const result = await pool.query(
       'UPDATE local_products SET is_active = false, updated_at = NOW() WHERE id = $1 RETURNING id, name',
@@ -186,7 +171,7 @@ router.delete('/:id', authenticateToken, requireAdmin, async (req, res) => {
 });
 
 // Bulk update stock (admin only)
-router.post('/bulk-stock-update', authenticateToken, requireAdmin, async (req, res) => {
+router.post('/bulk-stock-update', requireAdmin, async (req, res) => {
   try {
     const { updates } = req.body; // Array of { id, stock_quantity }
     
