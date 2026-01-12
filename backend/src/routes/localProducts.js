@@ -38,6 +38,37 @@ function generateSKU(productName, existingProducts = []) {
   return `SNUG-${mmyy}-${sequenceNum}-${namePrefix}`;
 }
 
+// Category Suggestion Utility
+const CATEGORY_KEYWORDS = {
+  'Accessories': ['accessory', 'carrier', 'bag', 'backpack', 'strap', 'holder', 'hook', 'organizer'],
+  'Bedding': ['crib', 'bassinet', 'mattress', 'sheet', 'blanket', 'duvet', 'comforter', 'bedding', 'sleeping bag'],
+  'Baby Clothing': ['clothes', 'shirt', 'pants', 'dress', 'onesie', 'romper', 'jacket', 'coat', 'sweater', 'socks'],
+  'Nursery Items': ['crib', 'bassinet', 'dresser', 'changing table', 'wardrobe', 'furniture', 'nightlight', 'lamp'],
+  'Toys': ['toy', 'game', 'puzzle', 'doll', 'teddy', 'rattle', 'mobile', 'play mat', 'building block'],
+  'Feeding': ['bottle', 'nipple', 'formula', 'feeding', 'breast pump', 'sterilizer', 'warmer', 'bibs', 'spoon', 'fork'],
+  'Health & Safety': ['thermometer', 'monitor', 'safety gate', 'corner guard', 'bumper', 'outlet cover', 'helmet', 'first aid'],
+  'Moms Essentials': ['nursing', 'breast', 'maternity', 'recovery', 'pillow', 'cushion', 'mom essentials'],
+  'Travel / Strollers': ['stroller', 'pram', 'buggy', 'car seat', 'travel', 'portable', 'carrier', 'jogger', 'pushchair'],
+  'Diapering': ['diaper', 'nappy', 'pull-up', 'wipes', 'rash cream', 'diaper bag', 'changing pad']
+};
+
+function suggestCategory(productName, productDescription) {
+  const text = `${productName} ${productDescription || ''}`.toLowerCase();
+  const scores = {};
+  
+  // Score each category based on keyword matches
+  Object.entries(CATEGORY_KEYWORDS).forEach(([category, keywords]) => {
+    scores[category] = keywords.filter(keyword => text.includes(keyword)).length;
+  });
+  
+  // Find category with highest score
+  const suggestedCategory = Object.entries(scores)
+    .filter(([_, score]) => score > 0)
+    .sort((a, b) => b[1] - a[1])[0]?.[0];
+  
+  return suggestedCategory || null;
+}
+
 // Generate SKU preview (admin only)
 router.get('/generate-sku', requireAdmin, async (req, res) => {
   try {
