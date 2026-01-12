@@ -69,6 +69,23 @@ function suggestCategory(productName, productDescription) {
   return suggestedCategory || null;
 }
 
+// Suggest category (admin only)
+router.get('/suggest-category', requireAdmin, async (req, res) => {
+  try {
+    const { productName, description } = req.query;
+    
+    if (!productName) {
+      return res.status(400).json({ error: 'productName query parameter required' });
+    }
+    
+    const suggestedCategory = suggestCategory(productName, description || '');
+    res.json({ category: suggestedCategory });
+  } catch (error) {
+    console.error('Error suggesting category:', error);
+    res.status(500).json({ error: 'Failed to suggest category' });
+  }
+});
+
 // Generate SKU preview (admin only)
 router.get('/generate-sku', requireAdmin, async (req, res) => {
   try {
