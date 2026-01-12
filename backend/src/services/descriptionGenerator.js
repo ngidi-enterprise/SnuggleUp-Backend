@@ -93,7 +93,7 @@ async function generateDescriptionWithGemini(productName, imageBase64, imageMime
     throw new Error('Gemini API not configured. Set GEMINI_API_KEY environment variable.');
   }
 
-  const model = geminiClient.getGenerativeModel({ model: 'gemini-1.5-flash' });
+  const model = geminiClient.getGenerativeModel({ model: 'gemini-pro-vision' });
 
   const prompt = `You are a product description writer for SnuggleUp, a South African e-commerce store specializing in baby products.
 
