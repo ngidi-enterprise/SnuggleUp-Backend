@@ -4,6 +4,7 @@ import pool from '../db.js';
 import { cjClient } from '../services/cjClient.js';
 import { getRuntimeConfig, setShippingFallbackEnabled, isShippingFallbackEnabled } from '../services/configService.js';
 import { generateSEOTitles } from '../services/seoTitleGenerator.js';
+import { generateProductDescription, getAvailableProviders } from '../services/descriptionGenerator.js';
 import { getOrderById, buildCJOrderData, updateOrderCJInfo } from './orders.js';
 import { getSchedulerHealth, generateSchedulerReport, getExecutionHistory } from '../services/schedulerMonitor.js';
 import crypto from 'crypto';
@@ -621,6 +622,50 @@ router.post('/products/generate-seo-title', async (req, res) => {
       suggestions: [req.body?.originalTitle || ''],
       reasoning: 'Error occurred - using original title'
     });
+  }
+});
+
+// Generate product description using AI (Claude or Gemini)
+router.post('/products/generate-description', async (req, res) => {
+  try {
+    const { provider, productName, imageBase64, imageMimeType } = req.body;
+
+    if (!provider) {
+      return res.status(400).json({ error: 'provider is required (claude or gemini)' });
+    }
+
+    if (!productName) {
+      return res.status(400).json({ error: 'productName is required' });
+    }
+
+    if (!imageBase64) {
+      return res.status(400).json({ error: 'imageBase64 is required' });
+    }
+
+    const description = await generateProductDescription(
+      provider,
+      productName,
+      imageBase64,
+      imageMimeType || 'image/jpeg'
+    );
+
+    res.json({ description });
+  } catch (error) {
+    console.error('Description generation error:', error);
+    res.status(500).json({ 
+      error: error.message || 'Failed to generate description'
+    });
+  }
+});
+
+// Get available description generators
+router.get('/products/description-providers', async (req, res) => {
+  try {
+    const providers = getAvailableProviders();
+    res.json(providers);
+  } catch (error) {
+    console.error('Error checking providers:', error);
+    res.status(500).json({ error: 'Failed to check available providers' });
   }
 });
 
