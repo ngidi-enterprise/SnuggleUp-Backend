@@ -5,6 +5,59 @@ import { requireAdmin } from '../middleware/admin.js';
 
 export const router = express.Router();
 
+// SKU Generator Utility
+function generateSKU(productName, existingProducts = []) {
+  const now = new Date();
+  const month = String(now.getMonth() + 1).padStart(2, '0');
+  const year = String(now.getFullYear()).slice(-2);
+  const mmyy = `${month}${year}`;
+  
+  // Get first 3 alphanumeric characters of product name (uppercase)
+  const namePrefix = productName
+    .replace(/[^a-zA-Z0-9]/g, '')
+    .toUpperCase()
+    .slice(0, 3)
+    .padEnd(3, 'X'); // Pad with X if less than 3 chars
+  
+  // Find highest existing sequence number for this month/year
+  const pattern = `SNUG-${mmyy}-`;
+  const existingNumbers = existingProducts
+    .filter(p => p.sku && p.sku.startsWith(pattern))
+    .map(p => {
+      const match = p.sku.match(/SNUG-\d{4}-(\d{4})-/);
+      return match ? parseInt(match[1], 10) : 0;
+    })
+    .filter(n => !isNaN(n));
+  
+  const nextNumber = existingNumbers.length > 0 
+    ? Math.max(...existingNumbers) + 1 
+    : 1;
+  
+  const sequenceNum = String(nextNumber).padStart(4, '0');
+  
+  return `SNUG-${mmyy}-${sequenceNum}-${namePrefix}`;
+}
+
+// Generate SKU preview (admin only)
+router.get('/generate-sku', requireAdmin, async (req, res) => {
+  try {
+    const { productName } = req.query;
+    
+    if (!productName) {
+      return res.status(400).json({ error: 'productName query parameter required' });
+    }
+    
+    // Fetch existing products to determine next sequence number
+    const result = await pool.query('SELECT sku FROM local_products WHERE sku IS NOT NULL');
+    const generatedSKU = generateSKU(productName, result.rows);
+    
+    res.json({ sku: generatedSKU });
+  } catch (error) {
+    console.error('Error generating SKU:', error);
+    res.status(500).json({ error: 'Failed to generate SKU' });
+  }
+});
+
 // Get all local products (public)
 router.get('/', async (req, res) => {
   try {
@@ -80,6 +133,14 @@ router.post('/', requireAdmin, async (req, res) => {
       return res.status(400).json({ error: 'Name, price, and stock_quantity are required' });
     }
 
+    // Auto-generate SKU if not provided
+    let finalSKU = sku;
+    if (!finalSKU || finalSKU.trim() === '') {
+      const existingProducts = await pool.query('SELECT sku FROM local_products WHERE sku IS NOT NULL');
+      finalSKU = generateSKU(name, existingProducts.rows);
+      console.log(`📝 Auto-generated SKU: ${finalSKU} for product: ${name}`);
+    }
+
     const result = await pool.query(
       `INSERT INTO local_products 
         (name, description, price, compare_at_price, stock_quantity, sku, 
@@ -88,7 +149,7 @@ router.post('/', requireAdmin, async (req, res) => {
        RETURNING *`,
       [
         name, description, price, compare_at_price || null,
-        stock_quantity, sku || null, category || 'General',
+        stock_quantity, finalSKU, category || 'General',
         tags || [], images || [], weight_kg || null,
         dimensions || null, is_featured || false, is_active !== false
       ]
