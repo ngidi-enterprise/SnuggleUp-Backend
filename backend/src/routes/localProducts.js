@@ -97,6 +97,13 @@ router.post('/', requireAdmin, async (req, res) => {
     console.log(`✅ Local product created: ${name} (ID: ${result.rows[0].id})`);
     res.status(201).json(result.rows[0]);
   } catch (error) {
+    // Handle common DB errors with clearer messages
+    if (error.code === '23505') { // unique_violation
+      return res.status(409).json({ error: 'SKU must be unique. This SKU already exists.' });
+    }
+    if (error.code === '22P02') { // invalid_text_representation (e.g., JSON parse)
+      return res.status(400).json({ error: 'Invalid field format (check JSON for dimensions).' });
+    }
     console.error('Error creating local product:', error);
     res.status(500).json({ error: 'Failed to create product' });
   }
