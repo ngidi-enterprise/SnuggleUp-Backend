@@ -118,14 +118,14 @@ router.put('/:id', requireAdmin, async (req, res) => {
        SET name = COALESCE($1, name),
            description = COALESCE($2, description),
            price = COALESCE($3, price),
-           compare_at_price = $4,
+           compare_at_price = COALESCE($4, compare_at_price),
            stock_quantity = COALESCE($5, stock_quantity),
-           sku = $6,
+           sku = COALESCE($6, sku),
            category = COALESCE($7, category),
-           tags = COALESCE($8, tags),
-           images = COALESCE($9, images),
-           weight_kg = $10,
-           dimensions = $11,
+           tags = COALESCE($8::text[], tags),
+           images = COALESCE($9::text[], images),
+           weight_kg = COALESCE($10, weight_kg),
+           dimensions = COALESCE($11::jsonb, dimensions),
            is_featured = COALESCE($12, is_featured),
            is_active = COALESCE($13, is_active),
            updated_at = NOW()
@@ -145,6 +145,13 @@ router.put('/:id', requireAdmin, async (req, res) => {
     console.log(`✅ Local product updated: ${result.rows[0].name} (ID: ${id})`);
     res.json(result.rows[0]);
   } catch (error) {
+    // Handle common DB errors with clearer messages
+    if (error.code === '23505') { // unique_violation
+      return res.status(409).json({ error: 'SKU must be unique. This SKU already exists.' });
+    }
+    if (error.code === '22P02') { // invalid_text_representation (e.g., JSON parse)
+      return res.status(400).json({ error: 'Invalid field format (check JSON for dimensions).' });
+    }
     console.error('Error updating local product:', error);
     res.status(500).json({ error: 'Failed to update product' });
   }
