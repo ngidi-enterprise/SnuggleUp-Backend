@@ -3,6 +3,7 @@ import cors from 'cors';
 import dotenv from 'dotenv';
 import { fileURLToPath } from 'url';
 import { dirname } from 'path';
+import { router as authRouter } from './routes/auth.js';
 import { router as paymentsRouter } from './routes/payments.js';
 import { router as cjRouter } from './routes/cj.js';
 import { router as adminRouter } from './routes/admin.js';
@@ -77,6 +78,7 @@ app.use(express.urlencoded({ extended: false, limit: '50mb' }));
 app.use(express.json({ limit: '50mb' }));
 
 // Routes
+app.use('/api/auth', authRouter); // Authentication
 app.use('/api/payments', paymentsRouter);
 app.use('/api/cj', cjRouter);
 app.use('/api/admin', adminRouter);
