@@ -49,7 +49,9 @@ const CATEGORY_KEYWORDS = {
   'Health & Safety': ['thermometer', 'monitor', 'safety gate', 'corner guard', 'bumper', 'outlet cover', 'helmet', 'first aid'],
   'Moms Essentials': ['nursing', 'breast', 'maternity', 'recovery', 'pillow', 'cushion', 'mom essentials'],
   'Travel / Strollers': ['stroller', 'pram', 'buggy', 'car seat', 'travel', 'portable', 'carrier', 'jogger', 'pushchair'],
-  'Diapering': ['diaper', 'nappy', 'pull-up', 'wipes', 'rash cream', 'diaper bag', 'changing pad']
+  'Diapering': ['diaper', 'nappy', 'pull-up', 'wipes', 'rash cream', 'diaper bag', 'changing pad'],
+  'Bath & Potty': ['bath', 'bathing', 'bathtub', 'potty', 'seat', 'towel', 'wash', 'shampoo', 'soap', 'shower'],
+  'Bathtime': ['bath', 'bathing', 'bathtub', 'bathroom', 'wash', 'water', 'tub', 'splash', 'bath toys', 'bath time']
 };
 
 function suggestCategory(productName, productDescription) {
@@ -177,8 +179,8 @@ router.post('/', requireAdmin, async (req, res) => {
       is_featured, is_active
     } = req.body;
 
-    if (!name || !price || stock_quantity === undefined) {
-      return res.status(400).json({ error: 'Name, price, and stock_quantity are required' });
+    if (!name || !price) {
+      return res.status(400).json({ error: 'Name and price are required' });
     }
 
     // Auto-generate SKU if not provided
@@ -197,7 +199,7 @@ router.post('/', requireAdmin, async (req, res) => {
        RETURNING *`,
       [
         name, description, price, compare_at_price || null,
-        stock_quantity, finalSKU, category || 'General',
+        stock_quantity || 0, finalSKU, category || 'General',
         tags || [], images || [], weight_kg || null,
         dimensions || null, is_featured || false, is_active !== false
       ]
