@@ -103,9 +103,9 @@ router.post('/create', optionalAuth, async (req, res) => {
     // PayFast needs to reach the backend directly, not through a proxy/CDN
     const backendUrl = process.env.PAYFAST_BACKEND_URL || process.env.BACKEND_URL || 'https://snuggleup-backend.onrender.com';
     
-    // Generate unique order number
+    // Generate unique master order number (used for payment ID)
     const orderNumber = `ORDER-${Date.now()}`;
-    
+
     // Validate stock availability before payment - use CN total (CJ + factory) like storefront does
     if (orderItems && orderItems.length > 0) {
       const productIds = orderItems.map(item => {
@@ -146,48 +146,72 @@ router.post('/create', optionalAuth, async (req, res) => {
       }
     }
 
-    // Create order record in database (with pending status)
+    // Create order records in database (split local vs import)
     const userId = req.user?.userId || 'guest';
-    
     console.log('🔍 Debug - User info:', {
       userId,
       userIdType: typeof userId,
       userName: req.user?.name,
       userEmail: req.user?.email
     });
-    
-    // Merge/derive shipping details: allow frontend-provided values, fallback to user name when available
     const safeShippingDetails = {
       ...(shippingDetails || {}),
       customerName: (shippingDetails && shippingDetails.customerName) || req.user?.name || undefined,
     };
 
-    console.log('🔍 Debug - Order items:', orderItems?.map(item => ({
-      id: item.id,
-      idType: typeof item.id,
-      name: item.name,
-      quantity: item.quantity
-    })));
+    // split items
+    const localOrderItems = (orderItems || []).filter(i => i.isLocal);
+    const importOrderItems = (orderItems || []).filter(i => !i.isLocal);
+    const totalSubtotal = (subtotal || 0);
+    // derive subtotals if not provided
+    const localSubtotal = localOrderItems.reduce((sum,i) => sum + (i.price*i.quantity),0);
+    const importSubtotal = importOrderItems.reduce((sum,i) => sum + (i.price*i.quantity),0);
+
+    // allocate discount proportionally
+    const disc = discount || 0;
+    const discountLocal = totalSubtotal ? Math.round((localSubtotal/totalSubtotal) * disc) : 0;
+    const discountImport = disc - discountLocal;
 
     try {
-      await createOrder(userId, {
-        orderNumber,
-        items: orderItems,
-        subtotal: subtotal || 0,
-        shipping: shipping || 0,
-        discount: discount || 0,
-        total: amount,
-        email,
-        shippingCountry,
-        shippingMethod,
-        insurance,
-        shippingDetails: safeShippingDetails
-      });
-      console.log('✅ Order created:', orderNumber);
+      // create local order if items exist
+      if (localOrderItems.length > 0) {
+        const localOrderNumber = `${orderNumber}-L`;
+        await createOrder(userId, {
+          orderNumber: localOrderNumber,
+          items: localOrderItems,
+          subtotal: localSubtotal,
+          shipping: 0,
+          discount: discountLocal,
+          total: localSubtotal - discountLocal,
+          email,
+          shippingCountry,
+          shippingMethod,
+          insurance: { selected: false, cost: 0, coverage: 0 },
+          shippingDetails: safeShippingDetails
+        });
+        console.log('✅ Local order created:', localOrderNumber);
+      }
+      // create import order if items exist
+      if (importOrderItems.length > 0) {
+        const importOrderNumber = `${orderNumber}-I`;
+        await createOrder(userId, {
+          orderNumber: importOrderNumber,
+          items: importOrderItems,
+          subtotal: importSubtotal,
+          shipping: shipping || 0,
+          discount: discountImport,
+          total: importSubtotal + (shipping||0) + (insurance?.cost||0) - discountImport,
+          email,
+          shippingCountry,
+          shippingMethod,
+          insurance,
+          shippingDetails: safeShippingDetails
+        });
+        console.log('✅ Import order created:', importOrderNumber);
+      }
     } catch (orderError) {
-      console.error('❌ Failed to create order record:', orderError);
-      console.error('❌ Order creation failed with userId:', userId, 'type:', typeof userId);
-      // Continue with payment even if order creation fails - webhook will update it
+      console.error('❌ Failed to create split order records:', orderError);
+      // still continue to payment flow
     }
     
     // PayFast payment data - order matters for signature!
@@ -417,36 +441,43 @@ router.post('/notify', async (req, res) => {
 
     // Update order status if signature matches
     if (signaturesMatch) {
+      // for split orders we stored child orders with suffixes (-L and -I)
+      // find all orders whose number starts with the master ID
+      const pool = (await import('../db.js')).default;
+      const { rows: matching } = await pool.query(
+        `SELECT order_number, customer_email, total, items, customer_name FROM orders WHERE order_number LIKE $1`,
+        [orderNumber + '%']
+      );
+
       if (paymentStatus === 'COMPLETE') {
-        await updateOrderStatus(orderNumber, 'paid', payfastPaymentId);
-        // Send order confirmation email (best-effort, once only)
-        try {
-          const order = await getOrderByNumber(orderNumber);
-          if (order && order.customer_email && !order.sent_confirmation) {
-            const items = Array.isArray(order.items) ? order.items : [];
-            const emailResult = await sendOrderConfirmationEmail({
-              to: order.customer_email,
-              orderNumber: order.order_number,
-              totalAmount: order.total,
-              items,
-              customerName: order.customer_name
-            });
-            // Mark email as sent to prevent duplicates on IPN retries
-            if (emailResult.success) {
-              const pool = (await import('../db.js')).default;
-              await pool.query(
-                'UPDATE orders SET sent_confirmation = TRUE WHERE order_number = $1',
-                [orderNumber]
-              );
+        // update each matching order and send its own email
+        for (const ord of matching) {
+          await updateOrderStatus(ord.order_number, 'paid', payfastPaymentId);
+          if (ord.customer_email) {
+            try {
+              const items = Array.isArray(ord.items) ? ord.items : [];
+              const emailResult = await sendOrderConfirmationEmail({
+                to: ord.customer_email,
+                orderNumber: ord.order_number,
+                totalAmount: ord.total,
+                items,
+                customerName: ord.customer_name
+              });
+              if (emailResult.success) {
+                await pool.query(
+                  'UPDATE orders SET sent_confirmation = TRUE WHERE order_number = $1',
+                  [ord.order_number]
+                );
+              }
+            } catch (e) {
+              console.warn('Order confirmation email failed for', ord.order_number, e.message);
             }
           }
-        } catch (e) {
-          console.warn('Order confirmation email failed:', e.message);
         }
-      } else if (paymentStatus === 'FAILED') {
-        await updateOrderStatus(orderNumber, 'failed', payfastPaymentId);
-      } else if (paymentStatus === 'PENDING') {
-        await updateOrderStatus(orderNumber, 'pending', payfastPaymentId);
+      } else if (paymentStatus === 'FAILED' || paymentStatus === 'PENDING') {
+        for (const ord of matching) {
+          await updateOrderStatus(ord.order_number, paymentStatus === 'FAILED' ? 'failed' : 'pending', payfastPaymentId);
+        }
       }
     } else {
       console.warn('⚠️ PayFast IPN rejected - signature mismatch:', { 
