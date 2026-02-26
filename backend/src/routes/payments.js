@@ -176,13 +176,15 @@ router.post('/create', optionalAuth, async (req, res) => {
       // create local order if items exist
       if (localOrderItems.length > 0) {
         const localOrderNumber = `${orderNumber}-L`;
+        // Calculate local shipping: free if subtotal > R550, otherwise R99
+        const localShipping = localSubtotal > 550 ? 0 : 99;
         await createOrder(userId, {
           orderNumber: localOrderNumber,
           items: localOrderItems,
           subtotal: localSubtotal,
-          shipping: 0,
+          shipping: localShipping,
           discount: discountLocal,
-          total: localSubtotal - discountLocal,
+          total: localSubtotal + localShipping - discountLocal,
           email,
           shippingCountry,
           shippingMethod,
