@@ -175,7 +175,8 @@ router.post('/create', optionalAuth, async (req, res) => {
     try {
       // create local order if items exist
       if (localOrderItems.length > 0) {
-        const localOrderNumber = `${orderNumber}-L`;
+        // use explicit suffix so order numbers are self‑explaining
+        const localOrderNumber = `${orderNumber}-LOCAL`;
         // Calculate local shipping: free if subtotal > R550, otherwise R99
         const localShipping = localSubtotal > 550 ? 0 : 99;
         await createOrder(userId, {
@@ -195,7 +196,7 @@ router.post('/create', optionalAuth, async (req, res) => {
       }
       // create import order if items exist
       if (importOrderItems.length > 0) {
-        const importOrderNumber = `${orderNumber}-I`;
+        const importOrderNumber = `${orderNumber}-IMPORT`;
         await createOrder(userId, {
           orderNumber: importOrderNumber,
           items: importOrderItems,
@@ -443,7 +444,7 @@ router.post('/notify', async (req, res) => {
 
     // Update order status if signature matches
     if (signaturesMatch) {
-      // for split orders we stored child orders with suffixes (-L and -I)
+      // for split orders we stored child orders with human-readable suffixes (-LOCAL and -IMPORT)
       // find all orders whose number starts with the master ID
       const pool = (await import('../db.js')).default;
       const { rows: matching } = await pool.query(
