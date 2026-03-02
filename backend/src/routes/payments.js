@@ -58,13 +58,7 @@ router.post('/create', optionalAuth, async (req, res) => {
     
     console.log('📋 Shipping details received from frontend:', JSON.stringify(shippingDetails, null, 2));
 
-    // Validate SA ID before creating order/payment
-    const idDigits = (shippingDetails?.idNumber || '').replace(/\D/g, '');
-    if (!isValidSouthAfricanId(idDigits)) {
-      return res.status(400).json({
-        error: 'Invalid South African ID number (must be 13 digits with valid checksum)'
-      });
-    }
+    // ID number no longer collected; skip validation
     
     // Validate PayFast configuration
     const testMode = process.env.PAYFAST_TEST_MODE === 'true';
