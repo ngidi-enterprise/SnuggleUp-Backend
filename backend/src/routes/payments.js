@@ -39,8 +39,10 @@ router.post('/create', optionalAuth, async (req, res) => {
       orderItems, 
       subtotal, 
       shipping, 
+      localShipping,
       discount, 
       shippingMethod, 
+      localShippingMethod,
       shippingQuoted,
       shippingCountry,
       insurance,
@@ -171,18 +173,17 @@ router.post('/create', optionalAuth, async (req, res) => {
       if (localOrderItems.length > 0) {
         // use explicit suffix so order numbers are self‑explaining
         const localOrderNumber = `${orderNumber}-LOCAL`;
-        // Calculate local shipping: free if subtotal > R550, otherwise R99
-        const localShipping = localSubtotal > 550 ? 0 : 99;
+        const localShippingAmount = Math.max(Number(localShipping) || 0, 0);
         await createOrder(userId, {
           orderNumber: localOrderNumber,
           items: localOrderItems,
           subtotal: localSubtotal,
-          shipping: localShipping,
+          shipping: localShippingAmount,
           discount: discountLocal,
-          total: localSubtotal + localShipping - discountLocal,
+          total: localSubtotal + localShippingAmount - discountLocal,
           email,
           shippingCountry,
-          shippingMethod,
+          shippingMethod: localShippingMethod || 'Economy delivery - R100 flat rate',
           insurance: { selected: false, cost: 0, coverage: 0 },
           shippingDetails: safeShippingDetails
         });
