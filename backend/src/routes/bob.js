@@ -12,6 +12,7 @@ const getBobBaseUrl = () => {
 
 const getBobAuthToken = () => process.env.BOB_API_TOKEN || '';
 const bobMutationsEnabled = () => process.env.BOB_ENABLE_MUTATIONS === 'true';
+const rawBobRateProxyEnabled = () => process.env.BOB_ENABLE_RAW_RATE_PROXY === 'true';
 
 const buildBobUrl = (path) => {
   const cleanPath = String(path || '').replace(/^\/+/, '');
@@ -204,6 +205,35 @@ const collectRates = (data) => {
   return candidateLists.sort((a, b) => b.length - a.length)[0] || [];
 };
 
+const hasPendingProviderRates = (data) => (
+  Array.isArray(data?.provider_rate_requests) &&
+  data.provider_rate_requests.some((provider) => (
+    ['pending', 'processing', 'queued'].includes(String(provider?.status || '').toLowerCase())
+  ))
+);
+
+const wait = (milliseconds) => new Promise(resolve => setTimeout(resolve, milliseconds));
+
+const waitForBobRates = async (initialResult) => {
+  const rateRequestId = stringFrom(initialResult.data?.id, initialResult.data?.rate_request_id);
+  const maxAttempts = Math.min(Math.max(Number(process.env.BOB_RATE_POLL_ATTEMPTS || 8), 1), 12);
+  const intervalMs = Math.min(Math.max(Number(process.env.BOB_RATE_POLL_INTERVAL_MS || 750), 250), 5000);
+  let result = initialResult;
+
+  // Bob Go creates a rate request first, then completes individual courier quotes asynchronously.
+  for (let attempt = 0; rateRequestId && hasPendingProviderRates(result.data) && attempt < maxAttempts; attempt += 1) {
+    await wait(intervalMs);
+    result = await proxyToBob({
+      method: 'GET',
+      path: `rates/${rateRequestId}`,
+    });
+
+    if (!result.ok) break;
+  }
+
+  return result;
+};
+
 const detectRateType = (rate) => {
   const haystack = [
     rate.name,
@@ -300,6 +330,14 @@ const blockBobOperationalEndpointsUnlessEnabled = (req, res, next) => {
   });
 };
 
+const blockRawBobRateProxyUnlessEnabled = (req, res, next) => {
+  if (rawBobRateProxyEnabled()) return next();
+  return res.status(403).json({
+    error: 'Raw Bob Go rate proxy is disabled',
+    details: 'Use /api/bob/checkout-rates for customer-facing rate requests.',
+  });
+};
+
 router.get('/health', (_req, res) => {
   res.json({
     ok: true,
@@ -342,11 +380,15 @@ router.post('/checkout-rates', async (req, res) => {
       orderValue,
     });
 
-    const result = await proxyToBob({
+    let result = await proxyToBob({
       method: 'POST',
       path: process.env.BOB_RATES_PATH || 'rates',
       body: payload,
     });
+
+    if (result.ok && hasPendingProviderRates(result.data)) {
+      result = await waitForBobRates(result);
+    }
 
     if (!result.ok) {
       const details = stringFrom(
@@ -366,6 +408,8 @@ router.post('/checkout-rates', async (req, res) => {
       .map(normalizeRate)
       .filter(rate => rate.priceZAR > 0);
 
+    const stillPending = hasPendingProviderRates(result.data);
+
     return res.status(result.status).json({
       ok: result.ok,
       economy: {
@@ -381,6 +425,9 @@ router.post('/checkout-rates', async (req, res) => {
         destinationPostalCode: postalCode,
         parcelCount: payload.parcels.length,
       },
+      message: normalized.length === 0 && stillPending
+        ? 'Bob Go is still preparing courier quotes. Please try again in a moment.'
+        : undefined,
       bobStatus: result.status,
       raw: process.env.BOB_INCLUDE_RAW_RATES === 'true' ? result.data : undefined,
     });
@@ -432,7 +479,7 @@ router.post('/proxy', blockBobOperationalEndpointsUnlessEnabled, async (req, res
 
 // Convenience routes that accept a payload directly.
 // These are useful for quick testing and frontend wiring.
-router.post('/rates', async (req, res) => {
+router.post('/rates', blockRawBobRateProxyUnlessEnabled, async (req, res) => {
   try {
     const result = await proxyToBob({
       method: 'POST',
