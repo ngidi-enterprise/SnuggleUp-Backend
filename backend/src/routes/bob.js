@@ -198,12 +198,45 @@ const collectRates = (data) => {
       return;
     }
 
+    if (looksLikeRate(value)) candidateLists.push([value]);
     Object.values(value).forEach(entry => visit(entry, depth + 1));
   };
 
   visit(data);
   return candidateLists.sort((a, b) => b.length - a.length)[0] || [];
 };
+
+const describeResponseShape = (value, depth = 0) => {
+  if (Array.isArray(value)) {
+    return {
+      type: 'array',
+      length: value.length,
+      itemKeys: [...new Set(value.slice(0, 3).flatMap(item => (
+        item && typeof item === 'object' && !Array.isArray(item) ? Object.keys(item) : []
+      )))].slice(0, 20),
+    };
+  }
+
+  if (!value || typeof value !== 'object') return { type: typeof value };
+
+  const keys = Object.keys(value).slice(0, 30);
+  const children = depth < 2
+    ? Object.fromEntries(Object.entries(value)
+      .filter(([, child]) => child && typeof child === 'object')
+      .slice(0, 12)
+      .map(([key, child]) => [key, describeResponseShape(child, depth + 1)]))
+    : undefined;
+
+  return { type: 'object', keys, children };
+};
+
+const getRateDiagnostics = (data) => ({
+  providerResponses: (data?.provider_rate_requests || []).map(provider => ({
+    provider: stringFrom(provider.provider_name, provider.provider_slug, provider.provider_id),
+    status: stringFrom(provider.rate_response?.status, provider.status),
+    responseShape: describeResponseShape(provider.rate_response),
+  })),
+});
 
 const hasPendingProviderRates = (data) => (
   Array.isArray(data?.provider_rate_requests) &&
@@ -463,6 +496,7 @@ router.post('/checkout-rates', async (req, res) => {
       message: normalized.length === 0 && stillPending
         ? 'Bob Go is still preparing courier quotes. Please try again in a moment.'
         : undefined,
+      diagnostics: normalized.length === 0 ? getRateDiagnostics(result.data) : undefined,
       bobStatus: result.status,
       raw: process.env.BOB_INCLUDE_RAW_RATES === 'true' ? result.data : undefined,
     });
