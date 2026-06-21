@@ -291,6 +291,20 @@ router.post('/checkout-rates', async (req, res) => {
       body: payload,
     });
 
+    if (!result.ok) {
+      const details = stringFrom(
+        result.data?.message,
+        result.data?.error,
+        result.data?.detail,
+        result.data?.errors?.[0]?.message,
+        'Bob Go did not return a rate for this address'
+      );
+      return res.status(result.status).json({
+        error: 'Bob Go rate request failed',
+        details,
+      });
+    }
+
     const normalized = collectRates(result.data)
       .map(normalizeRate)
       .filter(rate => rate.priceZAR > 0);
