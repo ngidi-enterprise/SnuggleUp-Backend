@@ -90,14 +90,26 @@ const stringFrom = (...values) => {
   return '';
 };
 
+const collectionAddressConfig = () => [
+  ['BOB_COLLECTION_STREET', process.env.BOB_COLLECTION_STREET],
+  ['BOB_COLLECTION_SUBURB', process.env.BOB_COLLECTION_SUBURB],
+  ['BOB_COLLECTION_CITY', process.env.BOB_COLLECTION_CITY],
+  ['BOB_COLLECTION_PROVINCE', process.env.BOB_COLLECTION_PROVINCE],
+  ['BOB_COLLECTION_POSTAL_CODE', process.env.BOB_COLLECTION_POSTAL_CODE],
+];
+
+const missingCollectionAddressConfig = () => collectionAddressConfig()
+  .filter(([, value]) => !String(value || '').trim())
+  .map(([name]) => name);
+
 const getWarehouseAddress = () => ({
   company: process.env.BOB_COLLECTION_COMPANY || 'SnuggleUp',
-  street_address: process.env.BOB_COLLECTION_STREET || 'Warehouse',
+  street_address: process.env.BOB_COLLECTION_STREET || '',
   local_area: process.env.BOB_COLLECTION_SUBURB || '',
-  city: process.env.BOB_COLLECTION_CITY || 'Johannesburg',
-  zone: process.env.BOB_COLLECTION_PROVINCE || 'Gauteng',
+  city: process.env.BOB_COLLECTION_CITY || '',
+  zone: process.env.BOB_COLLECTION_PROVINCE || '',
   country: process.env.BOB_COLLECTION_COUNTRY || 'ZA',
-  code: process.env.BOB_COLLECTION_POSTAL_CODE || '2196',
+  code: process.env.BOB_COLLECTION_POSTAL_CODE || '',
 });
 
 const normalizeProvince = (province = '') => {
@@ -141,23 +153,55 @@ const buildCheckoutRatesPayload = ({ items, destination, orderValue }) => {
   };
 };
 
+const ratePrice = (rate = {}) => numberFrom(
+  rate.total_price,
+  rate.totalPrice,
+  rate.total,
+  rate.price,
+  rate.rate,
+  rate.amount,
+  rate.charge,
+  rate.cost,
+  rate.value,
+  rate.grand_total,
+  rate.total_cost,
+  rate.total_incl_vat,
+  rate.total_including_vat,
+  rate.total_price_including_vat,
+  rate.price_incl_vat,
+  rate.price_including_vat,
+  rate.pricing,
+  rate.costs,
+  rate.fees
+);
+
+const looksLikeRate = (value) => (
+  value &&
+  typeof value === 'object' &&
+  !Array.isArray(value) &&
+  ratePrice(value) > 0
+);
+
 const collectRates = (data) => {
-  const candidates = [
-    data,
-    data?.data,
-    data?.rates,
-    data?.quotes,
-    data?.data?.rates,
-    data?.data?.quotes,
-    data?.result,
-    data?.result?.rates,
-  ];
+  const candidateLists = [];
+  const visited = new Set();
 
-  for (const candidate of candidates) {
-    if (Array.isArray(candidate)) return candidate;
-  }
+  const visit = (value, depth = 0) => {
+    if (!value || depth > 6 || typeof value !== 'object' || visited.has(value)) return;
+    visited.add(value);
 
-  return [];
+    if (Array.isArray(value)) {
+      const rateEntries = value.filter(looksLikeRate);
+      if (rateEntries.length > 0) candidateLists.push(rateEntries);
+      value.forEach(entry => visit(entry, depth + 1));
+      return;
+    }
+
+    Object.values(value).forEach(entry => visit(entry, depth + 1));
+  };
+
+  visit(data);
+  return candidateLists.sort((a, b) => b.length - a.length)[0] || [];
 };
 
 const detectRateType = (rate) => {
@@ -166,7 +210,14 @@ const detectRateType = (rate) => {
     rate.service_name,
     rate.serviceName,
     rate.service_level?.name,
+    rate.service_level?.code,
     rate.serviceLevel?.name,
+    rate.service?.name,
+    rate.service?.code,
+    rate.product?.name,
+    rate.product?.code,
+    rate.courier?.name,
+    rate.courier?.display_name,
     rate.courier,
     rate.courier_name,
     rate.courierName,
@@ -177,7 +228,7 @@ const detectRateType = (rate) => {
     rate.description,
   ].filter(Boolean).join(' ').toLowerCase();
 
-  if (/(pudo|locker|pickup|pick-up|pick up|collection|counter|dropbox|drop box|drop-off|drop off|point)/.test(haystack)) {
+  if (/(pudo|paxi|locker|pickup|pick-up|pick up|collection|counter|dropbox|drop box|drop-off|drop off|point)/.test(haystack)) {
     return 'pickup';
   }
 
@@ -192,6 +243,8 @@ const normalizeRate = (rate, index) => {
   const courier = stringFrom(
     rate.courier_name,
     rate.courierName,
+    rate.courier?.name,
+    rate.courier?.display_name,
     rate.courier,
     rate.provider_name,
     rate.provider,
@@ -204,24 +257,17 @@ const normalizeRate = (rate, index) => {
     rate.serviceName,
     rate.name,
     rate.service_level?.name,
+    rate.service_level?.code,
     rate.serviceLevel?.name,
+    rate.service?.name,
+    rate.service?.code,
+    rate.product?.name,
+    rate.product?.code,
     rate.service_type,
     rate.type
   );
 
-  const priceZAR = numberFrom(
-    rate.total_price,
-    rate.totalPrice,
-    rate.total,
-    rate.price,
-    rate.rate,
-    rate.amount,
-    rate.charge,
-    rate.cost,
-    rate.value,
-    rate.grand_total,
-    rate.total_cost
-  );
+  const priceZAR = ratePrice(rate);
 
   return {
     id: stringFrom(rate.id, rate.rate_id, rate.service_code, rate.code, `${index}`),
@@ -261,6 +307,8 @@ router.get('/health', (_req, res) => {
     baseUrl: getBobBaseUrl(),
     tokenConfigured: Boolean(getBobAuthToken()),
     mutationsEnabled: bobMutationsEnabled(),
+    collectionAddressConfigured: missingCollectionAddressConfig().length === 0,
+    missingCollectionVariables: missingCollectionAddressConfig(),
   });
 });
 
@@ -277,6 +325,15 @@ router.post('/checkout-rates', async (req, res) => {
 
     if (!/^\d{4}$/.test(postalCode)) {
       return res.status(400).json({ error: 'A valid South African postal code is required for Bob Go live rates' });
+    }
+
+    const missingCollectionVariables = missingCollectionAddressConfig();
+    if (missingCollectionVariables.length > 0) {
+      return res.status(503).json({
+        error: 'Bob Go collection address is incomplete',
+        details: 'Add the missing Bob Go collection address variables to the backend service before requesting rates.',
+        missingCollectionVariables,
+      });
     }
 
     const payload = buildCheckoutRatesPayload({
