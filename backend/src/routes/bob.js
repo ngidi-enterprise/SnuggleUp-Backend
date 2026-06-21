@@ -208,25 +208,60 @@ const collectRates = (data) => {
 const hasPendingProviderRates = (data) => (
   Array.isArray(data?.provider_rate_requests) &&
   data.provider_rate_requests.some((provider) => (
-    ['pending', 'processing', 'queued'].includes(String(provider?.status || '').toLowerCase())
+    ['pending', 'processing', 'queued'].includes(String(
+      provider?.rate_response?.status || provider?.status || ''
+    ).toLowerCase())
   ))
 );
 
 const wait = (milliseconds) => new Promise(resolve => setTimeout(resolve, milliseconds));
 
+const getRateResponsePath = (rateResponseId) => {
+  const pathTemplate = process.env.BOB_RATE_RESPONSE_PATH || 'rate-responses/{id}';
+  return pathTemplate.replace('{id}', encodeURIComponent(rateResponseId));
+};
+
+const pollProviderRateResponses = async (data) => {
+  const providers = Array.isArray(data?.provider_rate_requests) ? data.provider_rate_requests : [];
+  const responseIds = providers.map(provider => stringFrom(provider?.rate_response_id));
+
+  if (responseIds.some(id => !id)) return null;
+
+  const responses = await Promise.all(responseIds.map(async (rateResponseId) => (
+    proxyToBob({
+      method: 'GET',
+      path: getRateResponsePath(rateResponseId),
+    })
+  )));
+
+  const failedResponse = responses.find(response => !response.ok);
+  if (failedResponse) return failedResponse;
+
+  return {
+    ok: true,
+    status: 200,
+    data: {
+      ...data,
+      provider_rate_requests: providers.map((provider, index) => ({
+        ...provider,
+        status: stringFrom(responses[index].data?.status, provider.status),
+        rate_response: responses[index].data,
+      })),
+    },
+  };
+};
+
 const waitForBobRates = async (initialResult) => {
-  const rateRequestId = stringFrom(initialResult.data?.id, initialResult.data?.rate_request_id);
   const maxAttempts = Math.min(Math.max(Number(process.env.BOB_RATE_POLL_ATTEMPTS || 8), 1), 12);
   const intervalMs = Math.min(Math.max(Number(process.env.BOB_RATE_POLL_INTERVAL_MS || 750), 250), 5000);
   let result = initialResult;
 
-  // Bob Go creates a rate request first, then completes individual courier quotes asynchronously.
-  for (let attempt = 0; rateRequestId && hasPendingProviderRates(result.data) && attempt < maxAttempts; attempt += 1) {
+  // Bob Go creates a rate request first, then completes each provider response asynchronously.
+  for (let attempt = 0; hasPendingProviderRates(result.data) && attempt < maxAttempts; attempt += 1) {
     await wait(intervalMs);
-    result = await proxyToBob({
-      method: 'GET',
-      path: `rates/${rateRequestId}`,
-    });
+    const polledResult = await pollProviderRateResponses(result.data);
+    if (!polledResult) break;
+    result = polledResult;
 
     if (!result.ok) break;
   }
