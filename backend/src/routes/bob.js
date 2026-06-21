@@ -13,6 +13,7 @@ const getBobBaseUrl = () => {
 const getBobAuthToken = () => process.env.BOB_API_TOKEN || '';
 const bobMutationsEnabled = () => process.env.BOB_ENABLE_MUTATIONS === 'true';
 const rawBobRateProxyEnabled = () => process.env.BOB_ENABLE_RAW_RATE_PROXY === 'true';
+const getCheckoutRatesPath = () => process.env.BOB_CHECKOUT_RATES_PATH || 'rates-at-checkout';
 
 const buildBobUrl = (path) => {
   const cleanPath = String(path || '').replace(/^\/+/, '');
@@ -119,38 +120,37 @@ const normalizeProvince = (province = '') => {
   return text;
 };
 
-const parcelFromItems = (items = []) => {
-  const totalWeight = items.reduce((sum, item) => {
-    const weight = numberFrom(item.weight_kg, item.weight, item.raw?.weight_kg);
-    return sum + Math.max(weight, 0.2) * Math.max(Number(item.quantity || 1), 1);
-  }, 0);
-
-  return {
-    submitted_length_cm: 30,
-    submitted_width_cm: 25,
-    submitted_height_cm: 15,
-    submitted_weight_kg: Math.max(Math.ceil(totalWeight * 10) / 10, 0.5),
+const checkoutItemsFromCart = (items = []) => items.flatMap((item, index) => {
+  const quantity = Math.max(Math.floor(Number(item.quantity || 1)), 1);
+  const checkoutItem = {
+    description: stringFrom(item.name, item.product_name, `Cart item ${index + 1}`),
+    price: Math.max(numberFrom(item.price, item.unit_price, item.raw?.price), 0.01),
+    length_cm: Math.max(numberFrom(item.length_cm, item.length, item.raw?.length_cm), 30),
+    width_cm: Math.max(numberFrom(item.width_cm, item.width, item.raw?.width_cm), 25),
+    height_cm: Math.max(numberFrom(item.height_cm, item.height, item.raw?.height_cm), 15),
+    weight_kg: Math.max(numberFrom(item.weight_kg, item.weight, item.raw?.weight_kg), 0.2),
   };
-};
+
+  return Array.from({ length: quantity }, () => ({ ...checkoutItem }));
+});
 
 const buildCheckoutRatesPayload = ({ items, destination, orderValue }) => {
   const deliveryAddress = {
     company: destination?.company || '',
     street_address: destination?.address || 'Customer address',
-    local_area: destination?.suburb || '',
+    local_area: destination?.suburb || destination?.city || 'Johannesburg',
     city: destination?.city || 'Johannesburg',
     zone: normalizeProvince(destination?.province),
     country: 'ZA',
     code: destination?.postalCode,
   };
 
-  const parcels = [parcelFromItems(items)];
-
   return {
     collection_address: getWarehouseAddress(),
     delivery_address: deliveryAddress,
-    parcels,
+    items: checkoutItemsFromCart(items),
     declared_value: Math.max(numberFrom(orderValue), 1),
+    handling_time: Math.max(numberFrom(process.env.BOB_HANDLING_TIME), 0),
   };
 };
 
@@ -230,77 +230,7 @@ const describeResponseShape = (value, depth = 0) => {
   return { type: 'object', keys, children };
 };
 
-const getRateDiagnostics = (data) => ({
-  providerResponses: (data?.provider_rate_requests || []).map(provider => ({
-    provider: stringFrom(provider.provider_name, provider.provider_slug, provider.provider_id),
-    status: stringFrom(provider.rate_response?.status, provider.status),
-    responseShape: describeResponseShape(provider.rate_response),
-  })),
-});
-
-const hasPendingProviderRates = (data) => (
-  Array.isArray(data?.provider_rate_requests) &&
-  data.provider_rate_requests.some((provider) => (
-    ['pending', 'processing', 'queued'].includes(String(
-      provider?.rate_response?.status || provider?.status || ''
-    ).toLowerCase())
-  ))
-);
-
-const wait = (milliseconds) => new Promise(resolve => setTimeout(resolve, milliseconds));
-
-const getRateResponsePath = (rateResponseId) => {
-  const pathTemplate = process.env.BOB_RATE_RESPONSE_PATH || 'rate-responses/{id}';
-  return pathTemplate.replace('{id}', encodeURIComponent(rateResponseId));
-};
-
-const pollProviderRateResponses = async (data) => {
-  const providers = Array.isArray(data?.provider_rate_requests) ? data.provider_rate_requests : [];
-  const responseIds = providers.map(provider => stringFrom(provider?.rate_response_id));
-
-  if (responseIds.some(id => !id)) return null;
-
-  const responses = await Promise.all(responseIds.map(async (rateResponseId) => (
-    proxyToBob({
-      method: 'GET',
-      path: getRateResponsePath(rateResponseId),
-    })
-  )));
-
-  const failedResponse = responses.find(response => !response.ok);
-  if (failedResponse) return failedResponse;
-
-  return {
-    ok: true,
-    status: 200,
-    data: {
-      ...data,
-      provider_rate_requests: providers.map((provider, index) => ({
-        ...provider,
-        status: stringFrom(responses[index].data?.status, provider.status),
-        rate_response: responses[index].data,
-      })),
-    },
-  };
-};
-
-const waitForBobRates = async (initialResult) => {
-  const maxAttempts = Math.min(Math.max(Number(process.env.BOB_RATE_POLL_ATTEMPTS || 8), 1), 12);
-  const intervalMs = Math.min(Math.max(Number(process.env.BOB_RATE_POLL_INTERVAL_MS || 750), 250), 5000);
-  let result = initialResult;
-
-  // Bob Go creates a rate request first, then completes each provider response asynchronously.
-  for (let attempt = 0; hasPendingProviderRates(result.data) && attempt < maxAttempts; attempt += 1) {
-    await wait(intervalMs);
-    const polledResult = await pollProviderRateResponses(result.data);
-    if (!polledResult) break;
-    result = polledResult;
-
-    if (!result.ok) break;
-  }
-
-  return result;
-};
+const getRateDiagnostics = (data) => ({ responseShape: describeResponseShape(data) });
 
 const detectRateType = (rate) => {
   const haystack = [
@@ -448,15 +378,11 @@ router.post('/checkout-rates', async (req, res) => {
       orderValue,
     });
 
-    let result = await proxyToBob({
+    const result = await proxyToBob({
       method: 'POST',
-      path: process.env.BOB_RATES_PATH || 'rates',
+      path: getCheckoutRatesPath(),
       body: payload,
     });
-
-    if (result.ok && hasPendingProviderRates(result.data)) {
-      result = await waitForBobRates(result);
-    }
 
     if (!result.ok) {
       const details = stringFrom(
@@ -476,8 +402,6 @@ router.post('/checkout-rates', async (req, res) => {
       .map(normalizeRate)
       .filter(rate => rate.priceZAR > 0);
 
-    const stillPending = hasPendingProviderRates(result.data);
-
     return res.status(result.status).json({
       ok: result.ok,
       economy: {
@@ -491,10 +415,10 @@ router.post('/checkout-rates', async (req, res) => {
       pickupRates: normalized.filter(rate => rate.type === 'pickup'),
       request: {
         destinationPostalCode: postalCode,
-        parcelCount: payload.parcels.length,
+        itemCount: payload.items.length,
       },
-      message: normalized.length === 0 && stillPending
-        ? 'Bob Go is still preparing courier quotes. Please try again in a moment.'
+      message: normalized.length === 0
+        ? stringFrom(result.data?.message, result.data?.detail) || undefined
         : undefined,
       diagnostics: normalized.length === 0 ? getRateDiagnostics(result.data) : undefined,
       bobStatus: result.status,
