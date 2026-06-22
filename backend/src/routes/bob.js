@@ -242,17 +242,42 @@ const describeResponseShape = (value, depth = 0) => {
 
 const getRateDiagnostics = (data) => ({ responseShape: describeResponseShape(data) });
 
-const hasPendingCourierRates = (data) => (
-  Array.isArray(data?.provider_rate_requests) &&
-  data.provider_rate_requests.some((provider) => (
+const rateRequestCandidates = (data) => [
+  ...(Array.isArray(data?.rate_requests) ? data.rate_requests : []),
+  ...(Array.isArray(data?.data?.rate_requests) ? data.data.rate_requests : []),
+  data,
+].filter((request) => request && typeof request === 'object' && !Array.isArray(request));
+
+const providerRateRequests = (data) => rateRequestCandidates(data)
+  .flatMap((request) => (
+    Array.isArray(request.provider_rate_requests) ? request.provider_rate_requests : []
+  ));
+
+const rateRequestStatusSummary = (data) => rateRequestCandidates(data)
+  .map((request) => ({
+    id: stringFrom(request.id, request.rate_request_id),
+    providers: Array.isArray(request.provider_rate_requests)
+      ? request.provider_rate_requests.map((provider) => ({
+        provider: stringFrom(provider.provider_slug, provider.provider_name),
+        status: stringFrom(provider.status),
+        responseCount: Array.isArray(provider.responses) ? provider.responses.length : 0,
+      }))
+      : [],
+  }))
+  .filter((request) => request.id || request.providers.length > 0);
+
+const hasPendingCourierRates = (data) => providerRateRequests(data)
+  .some((provider) => (
     ['pending', 'processing', 'queued'].includes(String(provider?.status || '').toLowerCase())
-  ))
-);
+  ));
 
 const wait = (milliseconds) => new Promise(resolve => setTimeout(resolve, milliseconds));
 
 const waitForCourierRates = async (initialResult) => {
-  const rateRequestId = stringFrom(initialResult.data?.id, initialResult.data?.rate_request_id);
+  const rateRequestId = stringFrom(
+    ...rateRequestCandidates(initialResult.data)
+      .flatMap((request) => [request.id, request.rate_request_id])
+  );
   const maxAttempts = Math.min(Math.max(Number(process.env.BOB_RATE_POLL_ATTEMPTS || 8), 1), 12);
   const intervalMs = Math.min(Math.max(Number(process.env.BOB_RATE_POLL_INTERVAL_MS || 750), 250), 5000);
   let result = initialResult;
@@ -426,6 +451,11 @@ router.post('/checkout-rates', async (req, res) => {
     if (result.ok && hasPendingCourierRates(result.data)) {
       result = await waitForCourierRates(result);
     }
+
+    console.log('[bob] checkout rate result', {
+      status: result.status,
+      rateRequests: rateRequestStatusSummary(result.data),
+    });
 
     if (!result.ok) {
       const details = stringFrom(
