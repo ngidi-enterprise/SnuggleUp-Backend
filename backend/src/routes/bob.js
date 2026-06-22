@@ -13,7 +13,7 @@ const getBobBaseUrl = () => {
 const getBobAuthToken = () => process.env.BOB_API_TOKEN || '';
 const bobMutationsEnabled = () => process.env.BOB_ENABLE_MUTATIONS === 'true';
 const rawBobRateProxyEnabled = () => process.env.BOB_ENABLE_RAW_RATE_PROXY === 'true';
-const getCheckoutRatesPath = () => process.env.BOB_CHECKOUT_RATES_PATH || 'rates-at-checkout';
+const getCourierRatesPath = () => process.env.BOB_COURIER_RATES_PATH || 'rates';
 
 const buildBobUrl = (path) => {
   const cleanPath = String(path || '').replace(/^\/+/, '');
@@ -120,18 +120,29 @@ const normalizeProvince = (province = '') => {
   return text;
 };
 
-const checkoutItemsFromCart = (items = []) => items.flatMap((item, index) => {
+const dimensionsFromItem = (item = {}) => {
+  const rawDimensions = item.dimensions || item.raw?.dimensions || {};
+  if (typeof rawDimensions === 'object' && !Array.isArray(rawDimensions)) return rawDimensions;
+
+  try {
+    const parsed = JSON.parse(rawDimensions);
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {};
+  } catch {
+    return {};
+  }
+};
+
+const parcelsFromCart = (items = []) => items.flatMap((item) => {
   const quantity = Math.max(Math.floor(Number(item.quantity || 1)), 1);
-  const checkoutItem = {
-    description: stringFrom(item.name, item.product_name, `Cart item ${index + 1}`),
-    price: Math.max(numberFrom(item.price, item.unit_price, item.raw?.price), 0.01),
-    length_cm: Math.max(numberFrom(item.length_cm, item.length, item.raw?.length_cm), 30),
-    width_cm: Math.max(numberFrom(item.width_cm, item.width, item.raw?.width_cm), 25),
-    height_cm: Math.max(numberFrom(item.height_cm, item.height, item.raw?.height_cm), 15),
-    weight_kg: Math.max(numberFrom(item.weight_kg, item.weight, item.raw?.weight_kg), 0.2),
+  const dimensions = dimensionsFromItem(item);
+  const parcel = {
+    submitted_length_cm: Math.max(numberFrom(item.length_cm, item.length, dimensions.length_cm, dimensions.length, dimensions.l), 30),
+    submitted_width_cm: Math.max(numberFrom(item.width_cm, item.width, dimensions.width_cm, dimensions.width, dimensions.w), 25),
+    submitted_height_cm: Math.max(numberFrom(item.height_cm, item.height, dimensions.height_cm, dimensions.height, dimensions.h), 15),
+    submitted_weight_kg: Math.max(numberFrom(item.weight_kg, item.weight, item.product_weight, item.raw?.weight_kg), 0.2),
   };
 
-  return Array.from({ length: quantity }, () => ({ ...checkoutItem }));
+  return Array.from({ length: quantity }, () => ({ ...parcel }));
 });
 
 const buildCheckoutRatesPayload = ({ items, destination, orderValue }) => {
@@ -148,9 +159,8 @@ const buildCheckoutRatesPayload = ({ items, destination, orderValue }) => {
   return {
     collection_address: getWarehouseAddress(),
     delivery_address: deliveryAddress,
-    items: checkoutItemsFromCart(items),
+    parcels: parcelsFromCart(items),
     declared_value: Math.max(numberFrom(orderValue), 1),
-    handling_time: Math.max(numberFrom(process.env.BOB_HANDLING_TIME), 0),
   };
 };
 
@@ -231,6 +241,35 @@ const describeResponseShape = (value, depth = 0) => {
 };
 
 const getRateDiagnostics = (data) => ({ responseShape: describeResponseShape(data) });
+
+const hasPendingCourierRates = (data) => (
+  Array.isArray(data?.provider_rate_requests) &&
+  data.provider_rate_requests.some((provider) => (
+    ['pending', 'processing', 'queued'].includes(String(provider?.status || '').toLowerCase())
+  ))
+);
+
+const wait = (milliseconds) => new Promise(resolve => setTimeout(resolve, milliseconds));
+
+const waitForCourierRates = async (initialResult) => {
+  const rateRequestId = stringFrom(initialResult.data?.id, initialResult.data?.rate_request_id);
+  const maxAttempts = Math.min(Math.max(Number(process.env.BOB_RATE_POLL_ATTEMPTS || 8), 1), 12);
+  const intervalMs = Math.min(Math.max(Number(process.env.BOB_RATE_POLL_INTERVAL_MS || 750), 250), 5000);
+  let result = initialResult;
+
+  // Bob Go documents rate-result retrieval as GET /rates?id=<rate request id>.
+  for (let attempt = 0; rateRequestId && hasPendingCourierRates(result.data) && attempt < maxAttempts; attempt += 1) {
+    await wait(intervalMs);
+    result = await proxyToBob({
+      method: 'GET',
+      path: `rates?id=${encodeURIComponent(rateRequestId)}`,
+    });
+
+    if (!result.ok) break;
+  }
+
+  return result;
+};
 
 const detectRateType = (rate) => {
   const haystack = [
@@ -378,11 +417,15 @@ router.post('/checkout-rates', async (req, res) => {
       orderValue,
     });
 
-    const result = await proxyToBob({
+    let result = await proxyToBob({
       method: 'POST',
-      path: getCheckoutRatesPath(),
+      path: getCourierRatesPath(),
       body: payload,
     });
+
+    if (result.ok && hasPendingCourierRates(result.data)) {
+      result = await waitForCourierRates(result);
+    }
 
     if (!result.ok) {
       const details = stringFrom(
@@ -415,7 +458,7 @@ router.post('/checkout-rates', async (req, res) => {
       pickupRates: normalized.filter(rate => rate.type === 'pickup'),
       request: {
         destinationPostalCode: postalCode,
-        itemCount: payload.items.length,
+        parcelCount: payload.parcels.length,
       },
       message: normalized.length === 0
         ? stringFrom(result.data?.message, result.data?.detail) || undefined
