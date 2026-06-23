@@ -316,8 +316,13 @@ const waitForCourierRates = async (initialResult) => {
   return result;
 };
 
+const hasPickupPointLocation = (value) => {
+  const normalized = String(value ?? '').trim().toLowerCase();
+  return Boolean(normalized) && !['0', 'null', 'undefined', 'false'].includes(normalized);
+};
+
 const detectRateType = (rate) => {
-  if (rate.pickup_point_location_id !== undefined && rate.pickup_point_location_id !== null) {
+  if (hasPickupPointLocation(rate.pickup_point_location_id)) {
     return 'pickup';
   }
 
@@ -417,6 +422,18 @@ const normalizeRate = (rate, index) => {
   };
 };
 
+const isCustomerFacingLiveRate = (rate) => {
+  const service = String(rate.service || '').trim().toLowerCase();
+
+  // Economy is intentionally owned by the store's R100 flat-rate option.
+  if (service === 'economy') return false;
+
+  // The sandbox same-day express service is not a viable customer option at its quoted price.
+  if (service === 'local same day express') return false;
+
+  return true;
+};
+
 const blockBobOperationalEndpointsUnlessEnabled = (req, res, next) => {
   if (bobMutationsEnabled()) return next();
   return res.status(403).json({
@@ -506,7 +523,8 @@ router.post('/checkout-rates', async (req, res) => {
 
     const normalized = collectRates(result.data)
       .map(normalizeRate)
-      .filter(rate => rate.priceZAR > 0);
+      .filter(rate => rate.priceZAR > 0)
+      .filter(isCustomerFacingLiveRate);
 
     console.log('[bob] normalized checkout rates', JSON.stringify(
       normalized.map(({ id, courier, service, priceZAR, type }) => ({ id, courier, service, priceZAR, type }))
