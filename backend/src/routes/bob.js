@@ -425,13 +425,11 @@ const normalizeRate = (rate, index) => {
 const isCustomerFacingLiveRate = (rate) => {
   const service = String(rate.service || '').trim().toLowerCase();
 
-  // Economy is intentionally owned by the store's R100 flat-rate option.
-  if (service === 'economy') return false;
-
-  // The sandbox same-day express service is not a viable customer option at its quoted price.
-  if (service === 'local same day express') return false;
-
-  return true;
+  // These are service names, not prices. Bob Go supplies the live price per request.
+  return [
+    'local overnight flyer',
+    'local same day economy',
+  ].includes(service);
 };
 
 const blockBobOperationalEndpointsUnlessEnabled = (req, res, next) => {
