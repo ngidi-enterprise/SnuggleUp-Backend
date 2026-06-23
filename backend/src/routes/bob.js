@@ -14,6 +14,10 @@ const getBobAuthToken = () => process.env.BOB_API_TOKEN || '';
 const bobMutationsEnabled = () => process.env.BOB_ENABLE_MUTATIONS === 'true';
 const rawBobRateProxyEnabled = () => process.env.BOB_ENABLE_RAW_RATE_PROXY === 'true';
 const getCourierRatesPath = () => process.env.BOB_COURIER_RATES_PATH || 'rates';
+const getCourierRateRequestTimeoutMs = () => Math.min(
+  Math.max(Number(process.env.BOB_RATE_REQUEST_TIMEOUT_MS || 10000), 1000),
+  15000
+);
 
 const buildBobUrl = (path) => {
   const cleanPath = String(path || '').replace(/^\/+/, '');
@@ -136,6 +140,7 @@ const parcelsFromCart = (items = []) => items.flatMap((item) => {
   const quantity = Math.max(Math.floor(Number(item.quantity || 1)), 1);
   const dimensions = dimensionsFromItem(item);
   const parcel = {
+    description: stringFrom(item.name, item.description, 'Parcel'),
     submitted_length_cm: Math.max(numberFrom(item.length_cm, item.length, dimensions.length_cm, dimensions.length, dimensions.l), 30),
     submitted_width_cm: Math.max(numberFrom(item.width_cm, item.width, dimensions.width_cm, dimensions.width, dimensions.w), 25),
     submitted_height_cm: Math.max(numberFrom(item.height_cm, item.height, dimensions.height_cm, dimensions.height, dimensions.h), 15),
@@ -161,6 +166,7 @@ const buildCheckoutRatesPayload = ({ items, destination, orderValue }) => {
     delivery_address: deliveryAddress,
     parcels: parcelsFromCart(items),
     declared_value: Math.max(numberFrom(orderValue), 1),
+    timeout: getCourierRateRequestTimeoutMs(),
   };
 };
 
@@ -303,9 +309,11 @@ const detectRateType = (rate) => {
     rate.serviceName,
     rate.service_level?.name,
     rate.service_level?.code,
+    rate.service_level_code,
     rate.serviceLevel?.name,
     rate.service?.name,
     rate.service?.code,
+    rate.service_code,
     rate.product?.name,
     rate.product?.code,
     rate.courier?.name,
@@ -324,7 +332,7 @@ const detectRateType = (rate) => {
     return 'pickup';
   }
 
-  if (/(express|overnight|next day|next-day|same day|same-day|priority|fast)/.test(haystack)) {
+  if (/(express|overnight|next day|next-day|same day|same-day|priority|fast|\blsx\b)/.test(haystack)) {
     return 'express';
   }
 
@@ -452,10 +460,10 @@ router.post('/checkout-rates', async (req, res) => {
       result = await waitForCourierRates(result);
     }
 
-    console.log('[bob] checkout rate result', {
+    console.log('[bob] checkout rate result', JSON.stringify({
       status: result.status,
       rateRequests: rateRequestStatusSummary(result.data),
-    });
+    }));
 
     if (!result.ok) {
       const details = stringFrom(
