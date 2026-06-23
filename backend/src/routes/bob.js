@@ -176,6 +176,8 @@ const ratePrice = (rate = {}) => numberFrom(
   rate.total,
   rate.price,
   rate.rate,
+  rate.rate_amount,
+  rate.rate_amount_excl_vat,
   rate.amount,
   rate.charge,
   rate.cost,
@@ -315,12 +317,18 @@ const waitForCourierRates = async (initialResult) => {
 };
 
 const detectRateType = (rate) => {
+  if (rate.pickup_point_location_id !== undefined && rate.pickup_point_location_id !== null) {
+    return 'pickup';
+  }
+
   const haystack = [
     rate.name,
     rate.service_name,
     rate.serviceName,
     rate.service_level?.name,
     rate.service_level?.code,
+    rate.service_level?.type,
+    rate.service_level?.delivery_type,
     rate.service_level_code,
     rate.serviceLevel?.name,
     rate.service?.name,
