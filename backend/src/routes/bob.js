@@ -187,6 +187,10 @@ const ratePrice = (rate = {}) => numberFrom(
   rate.total_price_including_vat,
   rate.price_incl_vat,
   rate.price_including_vat,
+  rate.amount_incl_vat,
+  rate.total_amount,
+  rate.quoted_rate,
+  rate.charged_amount,
   rate.pricing,
   rate.costs,
   rate.fees
@@ -272,6 +276,14 @@ const rateRequestStatusSummary = (data) => rateRequestCandidates(data)
   }))
   .filter((request) => request.id || request.providers.length > 0);
 
+const rateResponseShapeSummary = (data) => providerRateRequests(data)
+  .map((provider) => ({
+    provider: stringFrom(provider.provider_slug, provider.provider_name),
+    responses: Array.isArray(provider.responses)
+      ? provider.responses.map((response) => describeResponseShape(response))
+      : [],
+  }));
+
 const hasPendingCourierRates = (data) => providerRateRequests(data)
   .some((provider) => (
     ['pending', 'processing', 'queued'].includes(String(provider?.status || '').toLowerCase())
@@ -336,7 +348,9 @@ const detectRateType = (rate) => {
     return 'express';
   }
 
-  return 'standard';
+  // The checkout only offers a flat Economy option or a Bob Go live door quote.
+  // Any completed non-pickup courier service belongs in the live door-delivery list.
+  return 'express';
 };
 
 const normalizeRate = (rate, index) => {
@@ -346,6 +360,7 @@ const normalizeRate = (rate, index) => {
     rate.courier?.name,
     rate.courier?.display_name,
     rate.courier,
+    rate.provider_slug,
     rate.provider_name,
     rate.provider,
     rate.company,
@@ -358,6 +373,8 @@ const normalizeRate = (rate, index) => {
     rate.name,
     rate.service_level?.name,
     rate.service_level?.code,
+    rate.service_level_name,
+    rate.service_level_code,
     rate.serviceLevel?.name,
     rate.service?.name,
     rate.service?.code,
@@ -370,7 +387,7 @@ const normalizeRate = (rate, index) => {
   const priceZAR = ratePrice(rate);
 
   return {
-    id: stringFrom(rate.id, rate.rate_id, rate.service_code, rate.code, `${index}`),
+    id: stringFrom(rate.id, rate.rate_id, rate.rate_response_id, rate.service_code, rate.code, `${index}`),
     courier,
     service,
     label: [courier, service].filter(Boolean).join(' - ') || `Bob Go rate ${index + 1}`,
@@ -482,6 +499,14 @@ router.post('/checkout-rates', async (req, res) => {
     const normalized = collectRates(result.data)
       .map(normalizeRate)
       .filter(rate => rate.priceZAR > 0);
+
+    console.log('[bob] normalized checkout rates', JSON.stringify(
+      normalized.map(({ id, courier, service, priceZAR, type }) => ({ id, courier, service, priceZAR, type }))
+    ));
+
+    if (normalized.length === 0) {
+      console.log('[bob] unparsed rate response shape', JSON.stringify(rateResponseShapeSummary(result.data)));
+    }
 
     return res.status(result.status).json({
       ok: result.ok,
