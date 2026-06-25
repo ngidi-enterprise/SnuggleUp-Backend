@@ -43,6 +43,7 @@ router.post('/create', optionalAuth, async (req, res) => {
       discount, 
       shippingMethod, 
       localShippingMethod,
+      localDeliveryMode,
       shippingQuoted,
       shippingCountry,
       insurance,
@@ -162,6 +163,14 @@ router.post('/create', optionalAuth, async (req, res) => {
     // derive subtotals if not provided
     const localSubtotal = localOrderItems.reduce((sum,i) => sum + (i.price*i.quantity),0);
     const importSubtotal = importOrderItems.reduce((sum,i) => sum + (i.price*i.quantity),0);
+    const calculatedOrderSubtotal = localSubtotal + importSubtotal;
+    const normalizedLocalDeliveryMode = String(localDeliveryMode || '').trim().toLowerCase();
+    const localMethodText = String(localShippingMethod || '').toLowerCase();
+    const freeLocalDelivery = calculatedOrderSubtotal > 600 && (
+      ['economy', 'pickup'].includes(normalizedLocalDeliveryMode) ||
+      localMethodText.startsWith('economy') ||
+      localMethodText.includes('pick-up')
+    );
 
     // allocate discount proportionally
     const disc = discount || 0;
@@ -173,7 +182,7 @@ router.post('/create', optionalAuth, async (req, res) => {
       if (localOrderItems.length > 0) {
         // use explicit suffix so order numbers are self‑explaining
         const localOrderNumber = `${orderNumber}-LOCAL`;
-        const localShippingAmount = Math.max(Number(localShipping) || 0, 0);
+        const localShippingAmount = freeLocalDelivery ? 0 : Math.max(Number(localShipping) || 0, 0);
         await createOrder(userId, {
           orderNumber: localOrderNumber,
           items: localOrderItems,
