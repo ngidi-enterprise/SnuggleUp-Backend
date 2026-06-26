@@ -110,6 +110,24 @@ async function initDb() {
   
   // Email tracking - prevent duplicate confirmation emails on PayFast IPN retries
   await pool.query(`ALTER TABLE orders ADD COLUMN IF NOT EXISTS sent_confirmation BOOLEAN DEFAULT FALSE;`);
+
+  // Bob Go tracking fields. Shipments are still created manually in Bob Go;
+  // these fields let Bob Go webhooks update customer-facing tracking.
+  await pool.query(`ALTER TABLE orders ADD COLUMN IF NOT EXISTS bob_shipment_id TEXT;`);
+  await pool.query(`ALTER TABLE orders ADD COLUMN IF NOT EXISTS bob_tracking_reference TEXT;`);
+  await pool.query(`ALTER TABLE orders ADD COLUMN IF NOT EXISTS bob_tracking_url TEXT;`);
+  await pool.query(`ALTER TABLE orders ADD COLUMN IF NOT EXISTS bob_courier_name TEXT;`);
+  await pool.query(`ALTER TABLE orders ADD COLUMN IF NOT EXISTS bob_provider_slug TEXT;`);
+  await pool.query(`ALTER TABLE orders ADD COLUMN IF NOT EXISTS bob_service_level TEXT;`);
+  await pool.query(`ALTER TABLE orders ADD COLUMN IF NOT EXISTS bob_tracking_status TEXT;`);
+  await pool.query(`ALTER TABLE orders ADD COLUMN IF NOT EXISTS bob_health_status TEXT;`);
+  await pool.query(`ALTER TABLE orders ADD COLUMN IF NOT EXISTS bob_health_status_reason TEXT;`);
+  await pool.query(`ALTER TABLE orders ADD COLUMN IF NOT EXISTS bob_tracking_events JSONB DEFAULT '[]'::jsonb;`);
+  await pool.query(`ALTER TABLE orders ADD COLUMN IF NOT EXISTS bob_tracking_last_event_time TIMESTAMP;`);
+  await pool.query(`ALTER TABLE orders ADD COLUMN IF NOT EXISTS bob_tracking_updated_at TIMESTAMP;`);
+  await pool.query(`ALTER TABLE orders ADD COLUMN IF NOT EXISTS bob_last_webhook_topic TEXT;`);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_orders_bob_tracking_reference ON orders(bob_tracking_reference);`);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_orders_bob_shipment_id ON orders(bob_shipment_id);`);
   
   // Migration: Change user_id from INTEGER to TEXT for Supabase UUID compatibility
   try {
