@@ -5,7 +5,7 @@ import { cjClient } from '../services/cjClient.js';
 import { getRuntimeConfig, setShippingFallbackEnabled, isShippingFallbackEnabled } from '../services/configService.js';
 import { generateSEOTitles } from '../services/seoTitleGenerator.js';
 import { generateProductDescription, getAvailableProviders } from '../services/descriptionGenerator.js';
-import { getOrderById, buildCJOrderData, updateOrderCJInfo } from './orders.js';
+import { getOrderById, buildCJOrderData, updateOrderCJInfo, updateOrderBobTracking } from './orders.js';
 import { getSchedulerHealth, generateSchedulerReport, getExecutionHistory } from '../services/schedulerMonitor.js';
 import crypto from 'crypto';
 
@@ -1111,7 +1111,7 @@ router.put('/orders/:id', async (req, res) => {
     const { id } = req.params;
     const { status } = req.body;
 
-    if (!['pending', 'completed', 'failed', 'cancelled'].includes(status)) {
+    if (!['pending', 'paid', 'completed', 'failed', 'cancelled'].includes(status)) {
       return res.status(400).json({ error: 'Invalid status' });
     }
 
@@ -1130,6 +1130,45 @@ router.put('/orders/:id', async (req, res) => {
   } catch (error) {
     console.error('Update order error:', error);
     res.status(500).json({ error: 'Failed to update order' });
+  }
+});
+
+// Link or update Bob Go tracking for an order.
+// The Bob Go shipment is still created manually; this only stores the reference
+// and gives webhooks a reliable way to update the customer-facing timeline.
+router.put('/orders/:id/tracking', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const textOrNull = (value) => {
+      const text = String(value ?? '').trim();
+      return text || null;
+    };
+
+    const trackingEvents = Array.isArray(req.body?.bobTrackingEvents)
+      ? req.body.bobTrackingEvents
+      : undefined;
+
+    const updatedOrder = await updateOrderBobTracking(id, {
+      bobShipmentId: textOrNull(req.body?.bobShipmentId),
+      bobTrackingReference: textOrNull(req.body?.bobTrackingReference),
+      bobTrackingUrl: textOrNull(req.body?.bobTrackingUrl),
+      bobCourierName: textOrNull(req.body?.bobCourierName),
+      bobProviderSlug: textOrNull(req.body?.bobProviderSlug),
+      bobServiceLevel: textOrNull(req.body?.bobServiceLevel),
+      bobTrackingStatus: textOrNull(req.body?.bobTrackingStatus),
+      bobHealthStatus: textOrNull(req.body?.bobHealthStatus),
+      bobHealthStatusReason: textOrNull(req.body?.bobHealthStatusReason),
+      bobTrackingEvents: trackingEvents,
+    });
+
+    if (!updatedOrder) {
+      return res.status(404).json({ error: 'Order not found' });
+    }
+
+    res.json({ order: updatedOrder });
+  } catch (error) {
+    console.error('[admin] Update Bob Go tracking error:', error);
+    res.status(500).json({ error: 'Failed to update tracking' });
   }
 });
 

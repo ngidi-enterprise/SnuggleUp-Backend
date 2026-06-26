@@ -1,5 +1,8 @@
 import express from 'express';
 import fetch from 'node-fetch';
+import crypto from 'crypto';
+import pool from '../db.js';
+import { updateOrderBobTracking } from './orders.js';
 
 export const router = express.Router();
 
@@ -94,6 +97,272 @@ const stringFrom = (...values) => {
     if (text) return text;
   }
   return '';
+};
+
+const getBobWebhookSecret = () => process.env.BOB_WEBHOOK_SECRET || '';
+
+const safeSecretEquals = (expected, received) => {
+  if (!expected || !received) return false;
+  const expectedBuffer = Buffer.from(String(expected));
+  const receivedBuffer = Buffer.from(String(received));
+  return expectedBuffer.length === receivedBuffer.length
+    && crypto.timingSafeEqual(expectedBuffer, receivedBuffer);
+};
+
+const verifyBobWebhookSecret = (req) => {
+  const expected = getBobWebhookSecret();
+  if (!expected) return true;
+
+  const received = stringFrom(
+    req.get('x-snuggleup-webhook-secret'),
+    req.get('x-webhook-secret'),
+    req.get('x-bob-webhook-secret'),
+    req.query?.secret,
+    req.body?.secret
+  );
+
+  return safeSecretEquals(expected, received);
+};
+
+const valueAtPath = (value, path) => String(path || '').split('.').reduce((current, key) => {
+  if (current === undefined || current === null) return undefined;
+  if (Array.isArray(current) && /^\d+$/.test(key)) return current[Number(key)];
+  return current[key];
+}, value);
+
+const firstStringAt = (value, paths = []) => stringFrom(...paths.map(path => valueAtPath(value, path)));
+
+const uniqueStrings = (...values) => {
+  const seen = new Set();
+  return values
+    .flat()
+    .map(value => stringFrom(value).replace(/^#/, '').trim())
+    .filter(Boolean)
+    .filter((value) => {
+      const key = value.toLowerCase();
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+};
+
+const parseBobWebhookPayload = (body = {}) => {
+  const payload = body.payload || body.data || body.shipment || body;
+  const topic = stringFrom(
+    body.topic,
+    body.event,
+    body.type,
+    body.webhook_topic,
+    body.webhookTopic,
+    body.webhook_subscription?.topic
+  );
+  return { payload, topic };
+};
+
+const normalizeTrackingEvent = (event = {}, fallback = {}) => {
+  if (!event || typeof event !== 'object' || Array.isArray(event)) return null;
+
+  const time = stringFrom(
+    event.time,
+    event.timestamp,
+    event.event_time,
+    event.eventTime,
+    event.tracking_time,
+    event.created_at,
+    event.date,
+    fallback.time
+  );
+  const status = stringFrom(
+    event.status,
+    event.tracking_status,
+    event.shipment_status,
+    event.code,
+    event.event_code,
+    fallback.status
+  );
+  const description = stringFrom(
+    event.description,
+    event.message,
+    event.event,
+    event.event_description,
+    event.status_description,
+    fallback.description
+  );
+  const location = stringFrom(
+    event.location?.name,
+    event.location?.city,
+    event.location_name,
+    event.city,
+    event.hub,
+    event.facility
+  );
+
+  if (!time && !status && !description && !location) return null;
+
+  return { time, status, description, location };
+};
+
+const trackingEventsFromPayload = (payload = {}) => {
+  const rawEvents = [
+    payload.tracking_events,
+    payload.trackingEvents,
+    payload.events,
+    payload.tracking?.events,
+    payload.tracking_history,
+    payload.trackingHistory,
+    payload.history,
+  ].find(Array.isArray);
+
+  const trackingStatus = firstStringAt(payload, [
+    'tracking_status',
+    'shipment_status',
+    'status',
+    'health_status',
+  ]);
+  const fallbackTime = firstStringAt(payload, [
+    'tracking_last_event_time',
+    'time_modified',
+    'updated_at',
+    'delivered_date',
+    'collected_date',
+  ]);
+
+  const normalized = Array.isArray(rawEvents)
+    ? rawEvents.map(event => normalizeTrackingEvent(event, { status: trackingStatus })).filter(Boolean)
+    : [];
+
+  if (normalized.length > 0) return normalized;
+  if (!trackingStatus) return [];
+
+  return [{
+    time: fallbackTime || new Date().toISOString(),
+    status: trackingStatus,
+    description: trackingStatus,
+    location: '',
+  }];
+};
+
+const mergeTrackingEvents = (existing = [], incoming = []) => {
+  const merged = [];
+  const seen = new Set();
+
+  [...existing, ...incoming].forEach((event) => {
+    const normalized = normalizeTrackingEvent(event);
+    if (!normalized) return;
+    const key = [
+      normalized.time,
+      normalized.status,
+      normalized.description,
+      normalized.location,
+    ].join('|').toLowerCase();
+    if (seen.has(key)) return;
+    seen.add(key);
+    merged.push(normalized);
+  });
+
+  return merged.sort((a, b) => {
+    const aTime = Date.parse(a.time || '');
+    const bTime = Date.parse(b.time || '');
+    if (Number.isFinite(aTime) && Number.isFinite(bTime)) return aTime - bTime;
+    if (Number.isFinite(aTime)) return -1;
+    if (Number.isFinite(bTime)) return 1;
+    return 0;
+  });
+};
+
+const findOrderForBobWebhook = async (payload = {}) => {
+  const orderCandidates = uniqueStrings(
+    firstStringAt(payload, [
+      'channel_order_number',
+      'channelOrderNumber',
+      'order_number',
+      'orderNumber',
+      'merchant_order_number',
+      'merchantOrderNumber',
+      'external_reference',
+      'externalReference',
+      'custom_tracking_reference',
+      'customTrackingReference',
+      'reference',
+    ])
+  );
+
+  const trackingCandidates = uniqueStrings(
+    firstStringAt(payload, [
+      'tracking_reference',
+      'trackingReference',
+      'provider_shipment_id',
+      'providerShipmentId',
+      'shipment_id',
+      'shipmentId',
+      'id',
+      'parcels.0.tracking_reference',
+    ]),
+    ...(Array.isArray(payload.parcels) ? payload.parcels.map(parcel => parcel?.tracking_reference) : [])
+  );
+
+  for (const candidate of orderCandidates) {
+    const result = await pool.query(
+      `SELECT * FROM orders WHERE LOWER(order_number) = LOWER($1) LIMIT 1`,
+      [candidate]
+    );
+    if (result.rows[0]) return { order: result.rows[0], matchedBy: 'order_number', candidate };
+  }
+
+  for (const candidate of trackingCandidates) {
+    const result = await pool.query(
+      `SELECT * FROM orders
+       WHERE LOWER(COALESCE(bob_tracking_reference, '')) = LOWER($1)
+          OR LOWER(COALESCE(bob_shipment_id, '')) = LOWER($1)
+          OR LOWER(COALESCE(cj_tracking_number, '')) = LOWER($1)
+       LIMIT 1`,
+      [candidate]
+    );
+    if (result.rows[0]) return { order: result.rows[0], matchedBy: 'tracking_reference', candidate };
+  }
+
+  return {
+    order: null,
+    matchedBy: null,
+    candidate: null,
+    orderCandidates,
+    trackingCandidates,
+  };
+};
+
+const bobTrackingDataFromPayload = (payload = {}, topic = '', trackingEvents = []) => {
+  const trackingReference = firstStringAt(payload, [
+    'tracking_reference',
+    'trackingReference',
+    'parcels.0.tracking_reference',
+  ]);
+
+  return {
+    bobShipmentId: firstStringAt(payload, ['id', 'shipment_id', 'shipmentId', 'provider_shipment_id', 'providerShipmentId']),
+    bobTrackingReference: trackingReference,
+    bobTrackingUrl: firstStringAt(payload, ['tracking_url', 'trackingUrl', 'tracking_link', 'trackingLink', 'tracking.url']),
+    bobCourierName: firstStringAt(payload, ['courier_name', 'courierName', 'courier.name', 'provider_name', 'providerName', 'provider_slug']),
+    bobProviderSlug: firstStringAt(payload, ['provider_slug', 'providerSlug', 'provider.slug']),
+    bobServiceLevel: firstStringAt(payload, [
+      'service_level.name',
+      'service_level.code',
+      'service_level_code',
+      'serviceLevel.name',
+      'serviceLevel.code',
+    ]),
+    bobTrackingStatus: firstStringAt(payload, ['tracking_status', 'shipment_status', 'status']),
+    bobHealthStatus: firstStringAt(payload, ['health_status', 'healthStatus']),
+    bobHealthStatusReason: firstStringAt(payload, ['health_status_reason', 'healthStatusReason', 'failed_reason']),
+    bobTrackingEvents: trackingEvents,
+    bobTrackingLastEventTime: firstStringAt(payload, [
+      'tracking_last_event_time',
+      'time_modified',
+      'updated_at',
+      'delivered_date',
+      'collected_date',
+    ]) || trackingEvents[trackingEvents.length - 1]?.time || null,
+    bobLastWebhookTopic: topic || null,
+  };
 };
 
 const collectionAddressConfig = () => [
@@ -455,10 +724,78 @@ router.get('/health', (_req, res) => {
     baseUrl: getBobBaseUrl(),
     tokenConfigured: Boolean(getBobAuthToken()),
     mutationsEnabled: bobMutationsEnabled(),
+    webhookSecretConfigured: Boolean(getBobWebhookSecret()),
     collectionAddressConfigured: missingCollectionAddressConfig().length === 0,
     missingCollectionVariables: missingCollectionAddressConfig(),
   });
 });
+
+const handleBobTrackingWebhook = async (req, res) => {
+  try {
+    if (!verifyBobWebhookSecret(req)) {
+      console.warn('[bob] rejected webhook with invalid secret');
+      return res.status(401).json({ ok: false, error: 'Invalid webhook secret' });
+    }
+
+    const parsed = parseBobWebhookPayload(req.body || {});
+    const payload = parsed.payload;
+    const topic = parsed.topic || stringFrom(
+      req.get('x-bobgo-topic'),
+      req.get('x-webhook-topic'),
+      req.get('x-event-topic')
+    );
+    const match = await findOrderForBobWebhook(payload);
+
+    if (!match.order) {
+      console.warn('[bob] tracking webhook received but no matching order was found', {
+        topic,
+        orderCandidates: match.orderCandidates,
+        trackingCandidates: match.trackingCandidates,
+      });
+      return res.status(200).json({
+        ok: true,
+        matched: false,
+        message: 'Webhook received, but no matching SnuggleUp order was found.',
+      });
+    }
+
+    let existingEvents = [];
+    try {
+      existingEvents = Array.isArray(match.order.bob_tracking_events)
+        ? match.order.bob_tracking_events
+        : JSON.parse(match.order.bob_tracking_events || '[]');
+    } catch {
+      existingEvents = [];
+    }
+
+    const incomingEvents = trackingEventsFromPayload(payload);
+    const mergedEvents = mergeTrackingEvents(existingEvents, incomingEvents);
+    const updatedOrder = await updateOrderBobTracking(
+      match.order.id,
+      bobTrackingDataFromPayload(payload, topic, mergedEvents)
+    );
+
+    console.log('[bob] tracking webhook matched order', {
+      orderNumber: updatedOrder?.order_number || match.order.order_number,
+      matchedBy: match.matchedBy,
+      candidate: match.candidate,
+      status: updatedOrder?.bob_tracking_status,
+      events: mergedEvents.length,
+    });
+
+    return res.status(200).json({
+      ok: true,
+      matched: true,
+      orderNumber: updatedOrder?.order_number || match.order.order_number,
+    });
+  } catch (error) {
+    console.error('[bob] tracking webhook error:', error);
+    return res.status(500).json({ ok: false, error: 'Failed to process Bob Go webhook' });
+  }
+};
+
+router.post('/webhooks', handleBobTrackingWebhook);
+router.post('/webhooks/tracking', handleBobTrackingWebhook);
 
 // Checkout-safe rate endpoint. This only asks Bob Go for test/live rates and never
 // creates Bob Go orders, shipments, waybills, bookings, or tracking records.

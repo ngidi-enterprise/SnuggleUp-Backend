@@ -4,27 +4,116 @@ import { authenticateToken } from '../middleware/auth.js';
 
 export const router = express.Router();
 
+const parseOrderForResponse = (order) => {
+  if (!order) return null;
+  const parsed = { ...order };
+  try { parsed.items = JSON.parse(parsed.items); } catch { parsed.items = []; }
+  parsed.bob_tracking_events = Array.isArray(parsed.bob_tracking_events) ? parsed.bob_tracking_events : [];
+  return parsed;
+};
+
 // Get all orders for logged-in user
 router.get('/history', authenticateToken, async (req, res) => {
   try {
     const userId = req.user.userId;
 
     const { rows } = await db.query(
-      `SELECT id, order_number, total, status, created_at, updated_at, items, subtotal, shipping, discount
+      `SELECT
+        id,
+        order_number,
+        total,
+        status,
+        created_at,
+        updated_at,
+        items,
+        subtotal,
+        shipping,
+        discount,
+        shipping_method,
+        bob_shipment_id,
+        bob_tracking_reference,
+        bob_tracking_url,
+        bob_courier_name,
+        bob_provider_slug,
+        bob_service_level,
+        bob_tracking_status,
+        bob_health_status,
+        bob_health_status_reason,
+        bob_tracking_events,
+        bob_tracking_last_event_time,
+        bob_tracking_updated_at,
+        cj_tracking_number,
+        cj_tracking_url,
+        cj_status
        FROM orders WHERE user_id = $1 ORDER BY created_at DESC`,
       [userId]
     );
 
     // Parse items JSON for each order
-    const ordersWithItems = rows.map(order => ({
-      ...order,
-      items: JSON.parse(order.items)
-    }));
+    const ordersWithItems = rows.map(parseOrderForResponse);
 
     res.json({ orders: ordersWithItems });
   } catch (error) {
     console.error('Get orders error:', error);
     res.status(500).json({ error: 'Failed to retrieve orders' });
+  }
+});
+
+// Public tracking lookup for guest customers.
+// Requires both order number and checkout email to avoid exposing order details.
+router.post('/track', async (req, res) => {
+  try {
+    const orderNumber = String(req.body?.orderNumber || '').replace(/^#/, '').trim();
+    const email = String(req.body?.email || '').trim().toLowerCase();
+
+    if (!orderNumber || !email) {
+      return res.status(400).json({ error: 'Order number and email are required' });
+    }
+
+    const result = await db.query(
+      `SELECT
+        id,
+        order_number,
+        total,
+        status,
+        created_at,
+        updated_at,
+        items,
+        subtotal,
+        shipping,
+        discount,
+        shipping_method,
+        bob_shipment_id,
+        bob_tracking_reference,
+        bob_tracking_url,
+        bob_courier_name,
+        bob_provider_slug,
+        bob_service_level,
+        bob_tracking_status,
+        bob_health_status,
+        bob_health_status_reason,
+        bob_tracking_events,
+        bob_tracking_last_event_time,
+        bob_tracking_updated_at,
+        cj_tracking_number,
+        cj_tracking_url,
+        cj_status
+       FROM orders
+       WHERE LOWER(order_number) = LOWER($1)
+         AND LOWER(COALESCE(customer_email, '')) = $2
+       LIMIT 1`,
+      [orderNumber, email]
+    );
+
+    const order = result.rows[0];
+    if (!order) {
+      return res.status(404).json({ error: 'We could not find an order with those details' });
+    }
+
+    res.json({ order: parseOrderForResponse(order) });
+  } catch (error) {
+    console.error('Track order error:', error);
+    res.status(500).json({ error: 'Failed to retrieve tracking' });
   }
 });
 
@@ -199,6 +288,72 @@ export const updateOrderTracking = async (cjOrderId, trackingNumber, trackingUrl
     return true;
   } catch (error) {
     console.error('Update order tracking error:', error);
+    throw error;
+  }
+};
+
+export const updateOrderBobTracking = async (orderId, trackingData = {}) => {
+  try {
+    const {
+      bobShipmentId = null,
+      bobTrackingReference = null,
+      bobTrackingUrl = null,
+      bobCourierName = null,
+      bobProviderSlug = null,
+      bobServiceLevel = null,
+      bobTrackingStatus = null,
+      bobHealthStatus = null,
+      bobHealthStatusReason = null,
+      bobTrackingEvents,
+      bobTrackingLastEventTime = null,
+      bobLastWebhookTopic = null,
+    } = trackingData;
+
+    const result = await db.query(
+      `UPDATE orders
+       SET
+        bob_shipment_id = COALESCE($1, bob_shipment_id),
+        bob_tracking_reference = COALESCE($2, bob_tracking_reference),
+        bob_tracking_url = COALESCE($3, bob_tracking_url),
+        bob_courier_name = COALESCE($4, bob_courier_name),
+        bob_provider_slug = COALESCE($5, bob_provider_slug),
+        bob_service_level = COALESCE($6, bob_service_level),
+        bob_tracking_status = COALESCE($7, bob_tracking_status),
+        bob_health_status = COALESCE($8, bob_health_status),
+        bob_health_status_reason = COALESCE($9, bob_health_status_reason),
+        bob_tracking_events = CASE
+          WHEN $10::jsonb IS NULL THEN bob_tracking_events
+          ELSE $10::jsonb
+        END,
+        bob_tracking_last_event_time = COALESCE($11::timestamp, bob_tracking_last_event_time),
+        bob_last_webhook_topic = COALESCE($12, bob_last_webhook_topic),
+        bob_tracking_updated_at = CURRENT_TIMESTAMP,
+        updated_at = CURRENT_TIMESTAMP
+       WHERE id = $13
+       RETURNING *`,
+      [
+        bobShipmentId,
+        bobTrackingReference,
+        bobTrackingUrl,
+        bobCourierName,
+        bobProviderSlug,
+        bobServiceLevel,
+        bobTrackingStatus,
+        bobHealthStatus,
+        bobHealthStatusReason,
+        bobTrackingEvents === undefined ? null : JSON.stringify(bobTrackingEvents),
+        bobTrackingLastEventTime,
+        bobLastWebhookTopic,
+        orderId,
+      ]
+    );
+
+    if (result.rows.length === 0) return null;
+    const order = result.rows[0];
+    try { order.items = JSON.parse(order.items); } catch {}
+    return order;
+  } catch (error) {
+    console.error('Update Bob Go tracking error:', error);
     throw error;
   }
 };
