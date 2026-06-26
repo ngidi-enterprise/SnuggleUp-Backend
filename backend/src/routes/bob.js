@@ -6,7 +6,7 @@ import { updateOrderBobTracking } from './orders.js';
 
 export const router = express.Router();
 
-const ECONOMY_FLAT_RATE_ZAR = 100;
+const ECONOMY_FLAT_RATE_ZAR = 99;
 
 const getBobBaseUrl = () => {
   const base = process.env.BOB_API_BASE_URL || 'https://api.sandbox.bobgo.co.za/v2/';
@@ -630,7 +630,7 @@ const detectRateType = (rate) => {
     return 'express';
   }
 
-  // The checkout only offers a flat Economy option or a Bob Go live door quote.
+  // The checkout only offers a flat standard option or a Bob Go live door quote.
   // Any completed non-pickup courier service belongs in the live door-delivery list.
   return 'express';
 };
@@ -873,7 +873,7 @@ router.post('/checkout-rates', async (req, res) => {
       ok: result.ok,
       economy: {
         type: 'economy',
-        label: 'Economy delivery',
+        label: 'Standard delivery',
         priceZAR: ECONOMY_FLAT_RATE_ZAR,
         isFlatRate: true,
       },

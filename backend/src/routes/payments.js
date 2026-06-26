@@ -169,6 +169,7 @@ router.post('/create', optionalAuth, async (req, res) => {
     const freeLocalDelivery = calculatedOrderSubtotal > 600 && (
       ['economy', 'pickup'].includes(normalizedLocalDeliveryMode) ||
       localMethodText.startsWith('economy') ||
+      localMethodText.startsWith('standard') ||
       localMethodText.includes('pick-up')
     );
 
@@ -192,7 +193,7 @@ router.post('/create', optionalAuth, async (req, res) => {
           total: localSubtotal + localShippingAmount - discountLocal,
           email,
           shippingCountry,
-          shippingMethod: localShippingMethod || 'Economy delivery - R100 flat rate',
+          shippingMethod: localShippingMethod || 'Standard delivery - R99',
           insurance: { selected: false, cost: 0, coverage: 0 },
           shippingDetails: safeShippingDetails
         });
