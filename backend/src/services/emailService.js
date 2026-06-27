@@ -1,4 +1,5 @@
 import nodemailer from 'nodemailer';
+import { buildTrackingPageUrl } from './trackingLinks.js';
 
 // Email service using GoDaddy SMTP
 // Add these to your .env file:
@@ -6,7 +7,7 @@ import nodemailer from 'nodemailer';
 // EMAIL_PORT=465
 // EMAIL_USER=your-email@yourdomain.com
 // EMAIL_PASS=your-email-password
-// EMAIL_FROM=SnuggleUp <noreply@yourdomain.com>
+// EMAIL_FROM=SnuggleUp <support@snuggleup.co.za>
 
 const createTransporter = () => {
   const host = process.env.EMAIL_HOST || 'smtpout.secureserver.net';
@@ -34,6 +35,174 @@ const createTransporter = () => {
   });
 };
 
+const getFromAddress = () => (
+  process.env.EMAIL_FROM ||
+  'SnuggleUp <support@snuggleup.co.za>'
+);
+
+const getLogoUrl = () => {
+  const explicit = process.env.SNUGGLEUP_LOGO_URL;
+  if (explicit) return explicit;
+  const frontendBase = (
+    process.env.FRONTEND_URL ||
+    process.env.SITE_URL ||
+    'https://snuggleup.co.za'
+  ).replace(/\/+$/g, '');
+  return `${frontendBase}/images/SnuggleUp%20Logo%20-%20Smaller.png`;
+};
+
+const escapeHtml = (value) => String(value ?? '')
+  .replace(/&/g, '&amp;')
+  .replace(/</g, '&lt;')
+  .replace(/>/g, '&gt;')
+  .replace(/"/g, '&quot;')
+  .replace(/'/g, '&#39;');
+
+export const trackingStatusText = (status) => {
+  switch (String(status || '').toLowerCase()) {
+    case 'created': return 'Created';
+    case 'pending-collection': return 'Waiting for collection';
+    case 'collected': return 'Collected';
+    case 'in-transit': return 'In transit';
+    case 'out-for-delivery': return 'Out for delivery';
+    case 'delivered': return 'Delivered';
+    case 'exception':
+    case 'failed':
+    case 'failed-will-retry': return 'Needs attention';
+    default: return status ? String(status).replace(/-/g, ' ') : 'Shipment update';
+  }
+};
+
+export const trackingStepKey = (status, orderStatus) => {
+  const normalized = String(status || '').toLowerCase();
+  if (normalized === 'delivered' || orderStatus === 'completed') return 'delivered';
+  if (normalized === 'out-for-delivery') return 'out-for-delivery';
+  if (normalized === 'in-transit') return 'in-transit';
+  if (normalized === 'collected') return 'collected';
+  if (normalized === 'created') return 'created';
+  if (normalized === 'pending-collection') return 'created';
+  if (orderStatus === 'paid') return 'payment-confirmed';
+  return 'order-placed';
+};
+
+const latestTrackingEvent = (events) => {
+  const safeEvents = Array.isArray(events) ? events : [];
+  return safeEvents
+    .filter(event => event && typeof event === 'object')
+    .slice()
+    .sort((a, b) => {
+      const aTime = Date.parse(a.time || '');
+      const bTime = Date.parse(b.time || '');
+      if (Number.isFinite(aTime) && Number.isFinite(bTime)) return bTime - aTime;
+      if (Number.isFinite(aTime)) return -1;
+      if (Number.isFinite(bTime)) return 1;
+      return 0;
+    })[0] || null;
+};
+
+export const sendTrackingUpdateEmail = async ({ to, order }) => {
+  const transporter = createTransporter();
+
+  if (!transporter) {
+    console.warn('Email not sent - transporter not configured');
+    return { success: false, error: 'Email service not configured' };
+  }
+
+  const orderNumber = order?.order_number;
+  const email = to || order?.customer_email;
+  const trackingRef = order?.bob_tracking_reference || order?.cj_tracking_number || '';
+  const trackingStatus = order?.bob_tracking_status || order?.cj_status || '';
+  const statusText = trackingStatusText(trackingStatus);
+  const trackingLink = buildTrackingPageUrl({ orderNumber, email });
+  const logoUrl = getLogoUrl();
+  const event = latestTrackingEvent(order?.bob_tracking_events);
+  const eventDescription = event?.description || event?.location || statusText;
+
+  const htmlContent = `
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <style>
+    body { margin: 0; padding: 0; background: #f7fbfa; font-family: Arial, sans-serif; color: #1f2933; }
+    .container { max-width: 640px; margin: 0 auto; padding: 28px 16px; }
+    .card { background: #ffffff; border: 1px solid #dbe8e4; border-radius: 10px; overflow: hidden; }
+    .header { text-align: center; padding: 28px 28px 18px; }
+    .logo { max-width: 230px; width: 70%; height: auto; }
+    .content { padding: 0 32px 32px; }
+    h1 { color: #126f71; font-size: 24px; margin: 10px 0 8px; text-align: center; }
+    p { line-height: 1.55; font-size: 15px; }
+    .status-box { background: #f7fbfa; border: 1px solid #dbe8e4; border-radius: 8px; padding: 18px; margin: 22px 0; }
+    .label { color: #5f6f73; font-size: 13px; margin: 0 0 4px; }
+    .value { color: #126f71; font-size: 20px; font-weight: 700; margin: 0; }
+    .meta { margin: 12px 0 0; color: #42575b; font-size: 14px; }
+    .button-wrap { text-align: center; margin: 26px 0 10px; }
+    .button { display: inline-block; background: #126f71; color: #ffffff !important; text-decoration: none; padding: 14px 28px; border-radius: 999px; font-weight: 700; }
+    .footer { color: #6b777a; font-size: 12px; text-align: center; padding: 18px 22px 26px; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="card">
+      <div class="header">
+        <img class="logo" src="${escapeHtml(logoUrl)}" alt="SnuggleUp Baby Store">
+      </div>
+      <div class="content">
+        <h1>Your delivery update</h1>
+        <p>Hi there,</p>
+        <p>Your SnuggleUp order has a new delivery update.</p>
+        <div class="status-box">
+          <p class="label">Order number</p>
+          <p class="value">${escapeHtml(orderNumber)}</p>
+          <p class="label" style="margin-top: 16px;">Current status</p>
+          <p class="value">${escapeHtml(statusText)}</p>
+          ${trackingRef ? `<p class="meta">Tracking ref: ${escapeHtml(trackingRef)}</p>` : ''}
+          ${eventDescription ? `<p class="meta">${escapeHtml(eventDescription)}</p>` : ''}
+        </div>
+        <p>You can follow the full delivery journey on SnuggleUp using the button below.</p>
+        <div class="button-wrap">
+          <a class="button" href="${escapeHtml(trackingLink)}">Track my parcel</a>
+        </div>
+      </div>
+      <div class="footer">
+        <p>Sent by SnuggleUp Baby Store. Need help? Email support@snuggleup.co.za.</p>
+      </div>
+    </div>
+  </div>
+</body>
+</html>
+  `.trim();
+
+  const textContent = `
+Your SnuggleUp delivery update
+
+Order number: ${orderNumber}
+Current status: ${statusText}
+${trackingRef ? `Tracking ref: ${trackingRef}\n` : ''}
+Track your parcel here: ${trackingLink}
+
+Need help? Email support@snuggleup.co.za.
+  `.trim();
+
+  try {
+    const info = await transporter.sendMail({
+      from: getFromAddress(),
+      replyTo: 'support@snuggleup.co.za',
+      to: email,
+      subject: `Delivery update for SnuggleUp order ${orderNumber}`,
+      text: textContent,
+      html: htmlContent,
+    });
+
+    console.log(`Tracking update email sent to ${email}:`, info.messageId);
+    return { success: true, messageId: info.messageId };
+  } catch (error) {
+    console.error('Failed to send tracking update email:', error);
+    return { success: false, error: error.message };
+  }
+};
+
 /**
  * Send tracking notification email to customer
  * @param {Object} options - Email options
@@ -50,7 +219,7 @@ export const sendTrackingEmail = async ({ to, orderNumber, trackingNumber, track
     return { success: false, error: 'Email service not configured' };
   }
 
-  const fromAddress = process.env.EMAIL_FROM || process.env.EMAIL_USER;
+  const fromAddress = getFromAddress();
 
   const trackingLink = trackingUrl || `https://www.google.com/search?q=${encodeURIComponent(trackingNumber)}`;
 
@@ -141,6 +310,7 @@ This is an automated message, please do not reply to this email.
   try {
     const info = await transporter.sendMail({
       from: fromAddress,
+      replyTo: 'support@snuggleup.co.za',
       to,
       subject: `📦 Your SnuggleUp Order ${orderNumber} Has Shipped!`,
       text: textContent,
@@ -172,7 +342,7 @@ export const sendOrderConfirmationEmail = async ({ to, orderNumber, totalAmount,
     return { success: false, error: 'Email service not configured' };
   }
 
-  const fromAddress = process.env.EMAIL_FROM || process.env.EMAIL_USER;
+  const fromAddress = getFromAddress();
 
   const itemsList = items.map(item => 
     `<li>${item.name} - R ${Number(item.price).toFixed(2)} x ${item.quantity}</li>`
@@ -224,6 +394,7 @@ export const sendOrderConfirmationEmail = async ({ to, orderNumber, totalAmount,
   try {
     const info = await transporter.sendMail({
       from: fromAddress,
+      replyTo: 'support@snuggleup.co.za',
       to,
       subject: `Order Confirmation - ${orderNumber}`,
       html: htmlContent,
