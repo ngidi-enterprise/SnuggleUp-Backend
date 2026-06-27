@@ -3,6 +3,7 @@ import fetch from 'node-fetch';
 import crypto from 'crypto';
 import pool from '../db.js';
 import { updateOrderBobTracking } from './orders.js';
+import { notifyTrackingUpdateIfNeeded } from '../services/trackingNotifications.js';
 
 export const router = express.Router();
 
@@ -672,7 +673,7 @@ const normalizeRate = (rate, index) => {
     id: stringFrom(rate.id, rate.rate_id, rate.rate_response_id, rate.service_code, rate.code, `${index}`),
     courier,
     service,
-    label: [courier, service].filter(Boolean).join(' - ') || `Bob Go rate ${index + 1}`,
+    label: [courier, service].filter(Boolean).join(' - ') || `Live courier rate ${index + 1}`,
     priceZAR: Math.round(priceZAR * 100) / 100,
     deliveryEstimate: stringFrom(
       rate.delivery_estimate,
@@ -704,15 +705,15 @@ const isCustomerFacingLiveRate = (rate) => {
 const blockBobOperationalEndpointsUnlessEnabled = (req, res, next) => {
   if (bobMutationsEnabled()) return next();
   return res.status(403).json({
-    error: 'Bob Go order and shipment operations are disabled',
-    details: 'This store is configured to fetch Bob Go rates only. Set BOB_ENABLE_MUTATIONS=true when you are ready to enable Bob Go order, shipment, or tracking operations.',
+    error: 'Courier order and shipment operations are disabled',
+    details: 'This store is configured to fetch courier rates only.',
   });
 };
 
 const blockRawBobRateProxyUnlessEnabled = (req, res, next) => {
   if (rawBobRateProxyEnabled()) return next();
   return res.status(403).json({
-    error: 'Raw Bob Go rate proxy is disabled',
+    error: 'Raw courier rate proxy is disabled',
     details: 'Use /api/bob/checkout-rates for customer-facing rate requests.',
   });
 };
@@ -775,6 +776,14 @@ const handleBobTrackingWebhook = async (req, res) => {
       bobTrackingDataFromPayload(payload, topic, mergedEvents)
     );
 
+    notifyTrackingUpdateIfNeeded({
+      previousOrder: match.order,
+      updatedOrder,
+      source: 'webhook',
+    }).catch((emailError) => {
+      console.warn('[tracking-email] webhook notification error:', emailError.message);
+    });
+
     console.log('[bob] tracking webhook matched order', {
       orderNumber: updatedOrder?.order_number || match.order.order_number,
       matchedBy: match.matchedBy,
@@ -809,14 +818,14 @@ router.post('/checkout-rates', async (req, res) => {
     }
 
     if (!/^\d{4}$/.test(postalCode)) {
-      return res.status(400).json({ error: 'A valid South African postal code is required for Bob Go live rates' });
+      return res.status(400).json({ error: 'A valid South African postal code is required for live courier rates' });
     }
 
     const missingCollectionVariables = missingCollectionAddressConfig();
     if (missingCollectionVariables.length > 0) {
       return res.status(503).json({
-        error: 'Bob Go collection address is incomplete',
-        details: 'Add the missing Bob Go collection address variables to the backend service before requesting rates.',
+        error: 'Collection address is incomplete',
+        details: 'Add the missing collection address variables to the backend service before requesting rates.',
         missingCollectionVariables,
       });
     }
@@ -848,10 +857,10 @@ router.post('/checkout-rates', async (req, res) => {
         result.data?.error,
         result.data?.detail,
         result.data?.errors?.[0]?.message,
-        'Bob Go did not return a rate for this address'
+        'No live courier rate was returned for this address'
       );
       return res.status(result.status).json({
-        error: 'Bob Go rate request failed',
+        error: 'Live courier rate request failed',
         details,
       });
     }
@@ -894,7 +903,7 @@ router.post('/checkout-rates', async (req, res) => {
   } catch (error) {
     console.error('Bob checkout rates error:', error.message);
     return res.status(error.message.includes('BOB_API_TOKEN') ? 503 : 500).json({
-      error: 'Bob Go rates failed',
+      error: 'Live courier rates failed',
       details: error.message,
     });
   }

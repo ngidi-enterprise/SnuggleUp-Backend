@@ -1,6 +1,7 @@
 import express from 'express';
 import db from '../db.js';
 import { authenticateToken } from '../middleware/auth.js';
+import { verifyTrackingToken } from '../services/trackingLinks.js';
 
 export const router = express.Router();
 
@@ -113,6 +114,66 @@ router.post('/track', async (req, res) => {
     res.json({ order: parseOrderForResponse(order) });
   } catch (error) {
     console.error('Track order error:', error);
+    res.status(500).json({ error: 'Failed to retrieve tracking' });
+  }
+});
+
+// Public tracking lookup from email links.
+// The link token is signed server-side so the customer can open tracking directly.
+router.post('/track-link', async (req, res) => {
+  try {
+    const orderNumber = String(req.body?.orderNumber || '').replace(/^#/, '').trim();
+    const token = String(req.body?.token || '').trim();
+
+    if (!orderNumber || !token) {
+      return res.status(400).json({ error: 'Tracking link is missing order details' });
+    }
+
+    const result = await db.query(
+      `SELECT
+        id,
+        order_number,
+        total,
+        status,
+        created_at,
+        updated_at,
+        items,
+        subtotal,
+        shipping,
+        discount,
+        shipping_method,
+        customer_email,
+        bob_shipment_id,
+        bob_tracking_reference,
+        bob_tracking_url,
+        bob_courier_name,
+        bob_provider_slug,
+        bob_service_level,
+        bob_tracking_status,
+        bob_health_status,
+        bob_health_status_reason,
+        bob_tracking_events,
+        bob_tracking_last_event_time,
+        bob_tracking_updated_at,
+        cj_tracking_number,
+        cj_tracking_url,
+        cj_status
+       FROM orders
+       WHERE LOWER(order_number) = LOWER($1)
+       LIMIT 1`,
+      [orderNumber]
+    );
+
+    const order = result.rows[0];
+    if (!order || !verifyTrackingToken({ orderNumber: order.order_number, email: order.customer_email, token })) {
+      return res.status(404).json({ error: 'This tracking link is no longer valid' });
+    }
+
+    const parsed = parseOrderForResponse(order);
+    delete parsed.customer_email;
+    res.json({ order: parsed });
+  } catch (error) {
+    console.error('Track order link error:', error);
     res.status(500).json({ error: 'Failed to retrieve tracking' });
   }
 });

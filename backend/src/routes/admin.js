@@ -7,6 +7,7 @@ import { generateSEOTitles } from '../services/seoTitleGenerator.js';
 import { generateProductDescription, getAvailableProviders } from '../services/descriptionGenerator.js';
 import { getOrderById, buildCJOrderData, updateOrderCJInfo, updateOrderBobTracking } from './orders.js';
 import { getSchedulerHealth, generateSchedulerReport, getExecutionHistory } from '../services/schedulerMonitor.js';
+import { notifyTrackingUpdateIfNeeded } from '../services/trackingNotifications.js';
 import crypto from 'crypto';
 
 export const router = express.Router();
@@ -1148,6 +1149,7 @@ router.put('/orders/:id/tracking', async (req, res) => {
       ? req.body.bobTrackingEvents
       : undefined;
 
+    const previousOrder = await getOrderById(id);
     const updatedOrder = await updateOrderBobTracking(id, {
       bobShipmentId: textOrNull(req.body?.bobShipmentId),
       bobTrackingReference: textOrNull(req.body?.bobTrackingReference),
@@ -1164,6 +1166,14 @@ router.put('/orders/:id/tracking', async (req, res) => {
     if (!updatedOrder) {
       return res.status(404).json({ error: 'Order not found' });
     }
+
+    notifyTrackingUpdateIfNeeded({
+      previousOrder,
+      updatedOrder,
+      source: 'admin',
+    }).catch((emailError) => {
+      console.warn('[tracking-email] admin notification error:', emailError.message);
+    });
 
     res.json({ order: updatedOrder });
   } catch (error) {
