@@ -1,4 +1,5 @@
 import { sendTrackingUpdateEmail, trackingStepKey } from './emailService.js';
+import { sendTrackingSms } from './winsmsService.js';
 
 const hasTrackingSignal = (order = {}) => Boolean(
   order.bob_tracking_reference ||
@@ -32,12 +33,12 @@ export const notifyTrackingUpdateIfNeeded = async ({ previousOrder, updatedOrder
     return { success: false, skipped: true, reason: 'tracking step unchanged' };
   }
 
-  const result = await sendTrackingUpdateEmail({
+  const emailResult = await sendTrackingUpdateEmail({
     to: updatedOrder.customer_email,
     order: updatedOrder,
   });
 
-  if (result.success) {
+  if (emailResult.success) {
     console.log(`[tracking-email] sent from ${source}`, {
       orderNumber: updatedOrder.order_number,
       previousStep,
@@ -46,9 +47,37 @@ export const notifyTrackingUpdateIfNeeded = async ({ previousOrder, updatedOrder
   } else {
     console.warn(`[tracking-email] failed from ${source}`, {
       orderNumber: updatedOrder.order_number,
-      error: result.error,
+      error: emailResult.error,
     });
   }
 
-  return result;
+  const smsResult = await sendTrackingSms({
+    order: updatedOrder,
+    currentStep,
+  });
+
+  if (smsResult.success) {
+    console.log(`[tracking-sms] sent from ${source}`, {
+      orderNumber: updatedOrder.order_number,
+      currentStep,
+      mobileNumber: smsResult.mobileNumber,
+      creditCost: smsResult.creditCost,
+    });
+  } else if (smsResult.skipped) {
+    console.log(`[tracking-sms] skipped from ${source}`, {
+      orderNumber: updatedOrder.order_number,
+      reason: smsResult.reason,
+    });
+  } else {
+    console.warn(`[tracking-sms] failed from ${source}`, {
+      orderNumber: updatedOrder.order_number,
+      error: smsResult.error,
+    });
+  }
+
+  return {
+    success: emailResult.success || smsResult.success,
+    email: emailResult,
+    sms: smsResult,
+  };
 };
