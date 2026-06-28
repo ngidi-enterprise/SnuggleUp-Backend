@@ -3,7 +3,7 @@ import crypto from 'crypto';
 import fetch from 'node-fetch';
 import { authenticateToken } from '../middleware/auth.js';
 import { createOrder, updateOrderStatus, getOrderByNumber } from './orders.js';
-import { sendOrderConfirmationEmail } from '../services/emailService.js';
+import { sendBrandedOrderConfirmationEmail } from '../services/orderConfirmationEmail.js';
 
 export const router = express.Router();
 
@@ -463,8 +463,17 @@ router.post('/notify', async (req, res) => {
           await updateOrderStatus(ord.order_number, 'paid', payfastPaymentId);
           if (ord.customer_email) {
             try {
-              const items = Array.isArray(ord.items) ? ord.items : [];
-              const emailResult = await sendOrderConfirmationEmail({
+              const items = Array.isArray(ord.items)
+                ? ord.items
+                : (() => {
+                  try {
+                    const parsed = JSON.parse(ord.items || '[]');
+                    return Array.isArray(parsed) ? parsed : [];
+                  } catch {
+                    return [];
+                  }
+                })();
+              const emailResult = await sendBrandedOrderConfirmationEmail({
                 to: ord.customer_email,
                 orderNumber: ord.order_number,
                 totalAmount: ord.total,
