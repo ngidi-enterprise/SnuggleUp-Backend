@@ -107,6 +107,10 @@ async function initDb() {
   await pool.query(`ALTER TABLE orders ADD COLUMN IF NOT EXISTS shipping_province TEXT;`);
   await pool.query(`ALTER TABLE orders ADD COLUMN IF NOT EXISTS shipping_postal_code TEXT;`);
   await pool.query(`ALTER TABLE orders ADD COLUMN IF NOT EXISTS shipping_phone TEXT;`);
+
+  // SMS tracking consent and destination. SMS is only sent when the customer opts in.
+  await pool.query(`ALTER TABLE orders ADD COLUMN IF NOT EXISTS sms_tracking_opt_in BOOLEAN DEFAULT FALSE;`);
+  await pool.query(`ALTER TABLE orders ADD COLUMN IF NOT EXISTS sms_tracking_phone TEXT;`);
   
   // Email tracking - prevent duplicate confirmation emails on PayFast IPN retries
   await pool.query(`ALTER TABLE orders ADD COLUMN IF NOT EXISTS sent_confirmation BOOLEAN DEFAULT FALSE;`);
