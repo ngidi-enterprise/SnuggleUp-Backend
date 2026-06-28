@@ -15,24 +15,29 @@ const getTrackingSecret = () => (
 
 const normaliseEmail = (email) => String(email || '').trim().toLowerCase();
 
-export const createTrackingToken = ({ orderNumber, email }) => {
+export const createTrackingToken = ({ orderNumber, email, bytes = 32 }) => {
   const payload = `${String(orderNumber || '').trim()}|${normaliseEmail(email)}`;
   const digest = crypto
     .createHmac('sha256', getTrackingSecret())
     .update(payload)
     .digest();
-  return base64Url(digest);
+  return base64Url(digest.subarray(0, bytes));
 };
 
-export const verifyTrackingToken = ({ orderNumber, email, token }) => {
-  const expected = createTrackingToken({ orderNumber, email });
-  const received = String(token || '').trim();
+const safeTokenCompare = (expected, received) => {
   if (!expected || !received) return false;
-
   const expectedBuffer = Buffer.from(expected);
   const receivedBuffer = Buffer.from(received);
   return expectedBuffer.length === receivedBuffer.length
     && crypto.timingSafeEqual(expectedBuffer, receivedBuffer);
+};
+
+export const verifyTrackingToken = ({ orderNumber, email, token }) => {
+  const received = String(token || '').trim();
+  const expectedFull = createTrackingToken({ orderNumber, email });
+  const expectedShort = createTrackingToken({ orderNumber, email, bytes: 16 });
+
+  return safeTokenCompare(expectedFull, received) || safeTokenCompare(expectedShort, received);
 };
 
 export const buildTrackingPageUrl = ({ orderNumber, email }) => {
@@ -41,6 +46,6 @@ export const buildTrackingPageUrl = ({ orderNumber, email }) => {
     process.env.SITE_URL ||
     'https://snuggleup.co.za'
   ).replace(/\/+$/g, '');
-  const token = createTrackingToken({ orderNumber, email });
-  return `${frontendBase}/#/track-order?order=${encodeURIComponent(orderNumber || '')}&token=${encodeURIComponent(token)}`;
+  const token = createTrackingToken({ orderNumber, email, bytes: 16 });
+  return `${frontendBase}/#/t?o=${encodeURIComponent(orderNumber || '')}&t=${encodeURIComponent(token)}`;
 };

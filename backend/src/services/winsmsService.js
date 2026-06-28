@@ -1,5 +1,6 @@
 import fetch from 'node-fetch';
 import { trackingStatusText } from './emailService.js';
+import { buildTrackingPageUrl } from './trackingLinks.js';
 
 const DEFAULT_SMS_STATUSES = [
   'collected',
@@ -32,6 +33,12 @@ const configuredSmsStatuses = () => {
       .map(item => item.trim().toLowerCase())
       .filter(Boolean)
   );
+};
+
+const smsMaxSegments = () => {
+  const parsed = Number.parseInt(process.env.WINSMS_MAX_SEGMENTS || '1', 10);
+  if (!Number.isFinite(parsed)) return 1;
+  return Math.min(Math.max(parsed, 1), 6);
 };
 
 export const normalizeSaPhoneForWinSms = (phone) => {
@@ -67,16 +74,40 @@ export const shouldSendTrackingSms = ({ order, currentStep }) => {
   return { send: true, mobileNumber };
 };
 
-const buildTrackingSmsMessage = ({ order, currentStep }) => {
-  const statusText = trackingStatusText(currentStep);
-  const orderNumber = order?.order_number || 'your order';
-  const siteName = (process.env.SMS_TRACKING_SITE_NAME || 'snuggleup.co.za').replace(/^https?:\/\//i, '').replace(/\/+$/g, '');
-  const message = `SnuggleUp: Order ${orderNumber} is now ${statusText}. Track at ${siteName}`;
+const smsFitsOneSegment = (message) => message.length <= 160;
 
-  // Keep the SMS to one segment so each update consumes one SMS credit.
-  return message.length <= 160
-    ? message
-    : `SnuggleUp: Your order is now ${statusText}. Track at ${siteName}`;
+const firstNameFromOrder = (order) => {
+  const firstName = String(order?.customer_name || '')
+    .trim()
+    .split(/\s+/)[0] || '';
+
+  return firstName
+    .replace(/[^a-zA-Z'-]/g, '')
+    .slice(0, 18);
+};
+
+const buildTrackingSmsMessage = ({ order, currentStep }) => {
+  const statusText = trackingStatusText(currentStep).toLowerCase();
+  const trackingLink = buildTrackingPageUrl({
+    orderNumber: order?.order_number,
+    email: order?.customer_email,
+  });
+  const firstName = firstNameFromOrder(order);
+  const trackingRef = order?.bob_tracking_reference || order?.cj_tracking_number || '';
+  const refText = trackingRef ? ` (Ref: ${trackingRef})` : '';
+  const namedMessage = firstName
+    ? `Hi ${firstName}, your SnuggleUp order is ${statusText}${refText}. Track at ${trackingLink}`
+    : '';
+  const noNameMessage = `Your SnuggleUp order is ${statusText}${refText}. Track at ${trackingLink}`;
+  const noRefMessage = firstName
+    ? `Hi ${firstName}, your SnuggleUp order is ${statusText}. Track at ${trackingLink}`
+    : `Your SnuggleUp order is ${statusText}. Track at ${trackingLink}`;
+
+  if (namedMessage && smsFitsOneSegment(namedMessage)) return namedMessage;
+  if (smsFitsOneSegment(noNameMessage)) return noNameMessage;
+  if (smsFitsOneSegment(noRefMessage)) return noRefMessage;
+
+  return `SnuggleUp update: ${statusText}. Track at ${trackingLink}`;
 };
 
 export const sendTrackingSms = async ({ order, currentStep }) => {
@@ -103,7 +134,7 @@ export const sendTrackingSms = async ({ order, currentStep }) => {
             clientMessageId,
           },
         ],
-        maxSegments: 1,
+        maxSegments: smsMaxSegments(),
       }),
     });
 
