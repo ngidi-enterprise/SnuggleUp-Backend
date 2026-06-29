@@ -2,7 +2,7 @@
 
 Add these variables to your backend environment (Render dashboard or local .env):
 
-BOB_API_BASE_URL=https://api.sandbox.bobgo.co.za/v2/
+BOB_API_BASE_URL=https://api.bobgo.co.za/v2/
 BOB_API_TOKEN=your_bob_bearer_token_here
 
 # Required for Bob Go rate quotes. Use your real collection or warehouse address.
@@ -24,6 +24,6 @@ BOB_RATE_POLL_INTERVAL_MS=750
 # Add the same value to the Bob Go webhook delivery URL as ?secret=...
 BOB_WEBHOOK_SECRET=choose_a_long_random_secret
 
-# Keep this false/omitted during launch. When omitted, the website can fetch rates
+# Keep this false/omitted during launch. When omitted, the website can fetch live rates
 # but cannot create Bob Go orders, shipments, waybills, bookings, or tracking.
 BOB_ENABLE_MUTATIONS=false
