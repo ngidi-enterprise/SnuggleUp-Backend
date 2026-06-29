@@ -133,6 +133,7 @@ router.get('/product/:productId', optionalAuth, async (req, res) => {
     const result = await pool.query(
       `SELECT 
         cr.id,
+        cr.user_id,
         cr.rating,
         cr.title,
         cr.comment,
@@ -140,9 +141,12 @@ router.get('/product/:productId', optionalAuth, async (req, res) => {
         cr.helpful_count,
         cr.created_at,
         u.name as author_name,
-        u.email as author_email
+        u.email as author_email,
+        o.customer_name as order_customer_name,
+        o.customer_email as order_customer_email
        FROM customer_reviews cr
        LEFT JOIN users u ON cr.user_id = u.id::text
+       LEFT JOIN orders o ON cr.order_id = o.id
        WHERE cr.product_id = $1
        ORDER BY cr.created_at DESC`,
       [productId]
@@ -153,7 +157,7 @@ router.get('/product/:productId', optionalAuth, async (req, res) => {
       rating: row.rating,
       title: row.title || row.comment.slice(0, 50),
       comment: row.comment,
-      author: row.author_name || 'Customer',
+      author: row.author_name || row.order_customer_name || 'Customer',
       verified: row.verified_purchase,
       helpful: row.helpful_count || 0,
       date: row.created_at,
