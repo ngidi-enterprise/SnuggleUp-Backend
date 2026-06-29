@@ -7,9 +7,6 @@ import { sendBrandedOrderConfirmationEmail } from '../services/orderConfirmation
 
 export const router = express.Router();
 
-// Temporary live PayFast test setting. Change back to 99 after the small test order.
-const STANDARD_DELIVERY_FEE_ZAR = 0;
-
 // Validate South African ID (13 digits + checksum)
 const isValidSouthAfricanId = (value = '') => {
   const digits = String(value).replace(/\D/g, '');
@@ -265,7 +262,7 @@ router.post('/create', optionalAuth, async (req, res) => {
           total: localSubtotal + localShippingAmount - discountLocal,
           email,
           shippingCountry,
-          shippingMethod: localShippingMethod || `Standard delivery - R${STANDARD_DELIVERY_FEE_ZAR}`,
+          shippingMethod: localShippingMethod || 'Standard delivery - R99',
           insurance: { selected: false, cost: 0, coverage: 0 },
           shippingDetails: safeShippingDetails
         });
