@@ -30,6 +30,75 @@ const optionalAuth = (req, res, next) => {
   authenticateToken(req, res, next); // Token present, validate it
 };
 
+const PAYFAST_SANDBOX_MERCHANT_ID = '10042854';
+const PAYFAST_SANDBOX_MERCHANT_KEY = 'bmvnyjivavg1a';
+
+const isPayFastTestMode = () => process.env.PAYFAST_TEST_MODE === 'true';
+const isPayFastDebugLogging = () => process.env.PAYFAST_DEBUG_LOGS === 'true';
+
+const getPayFastPassphrase = () => {
+  const rawPassphrase = process.env.PAYFAST_PASSPHRASE;
+  const forceNoPassphrase = process.env.PAYFAST_NO_PASSPHRASE === 'true';
+  const hasRawPassphrase = Boolean(rawPassphrase && String(rawPassphrase).trim());
+  const passphrase = forceNoPassphrase
+    ? ''
+    : hasRawPassphrase
+      ? rawPassphrase.trim()
+      : '';
+
+  return { passphrase, forceNoPassphrase, hasRawPassphrase };
+};
+
+const getPayFastConfig = (req) => {
+  const testMode = isPayFastTestMode();
+  const merchantId = (process.env.PAYFAST_MERCHANT_ID || '').trim();
+  const merchantKey = (process.env.PAYFAST_MERCHANT_KEY || '').trim();
+  const passphraseConfig = getPayFastPassphrase();
+  const frontendUrl = process.env.FRONTEND_URL || req?.headers?.origin || 'https://snuggleup.co.za';
+  const backendUrl = process.env.PAYFAST_BACKEND_URL || process.env.BACKEND_URL || 'https://snuggleup-backend.onrender.com';
+  const usingKnownSandboxCredentials =
+    merchantId === PAYFAST_SANDBOX_MERCHANT_ID ||
+    merchantKey === PAYFAST_SANDBOX_MERCHANT_KEY;
+
+  return {
+    testMode,
+    merchantId,
+    merchantKey,
+    frontendUrl,
+    backendUrl,
+    usingKnownSandboxCredentials,
+    ...passphraseConfig
+  };
+};
+
+router.get('/health', (req, res) => {
+  const config = getPayFastConfig(req);
+  const gatewayUrl = config.testMode
+    ? 'https://sandbox.payfast.co.za/eng/process'
+    : 'https://www.payfast.co.za/eng/process';
+
+  res.json({
+    mode: config.testMode ? 'sandbox' : 'live',
+    gatewayUrl,
+    merchantIdConfigured: Boolean(config.merchantId),
+    merchantKeyConfigured: Boolean(config.merchantKey),
+    usingKnownSandboxCredentials: config.usingKnownSandboxCredentials,
+    passphraseMode: config.passphrase
+      ? 'configured'
+      : config.forceNoPassphrase
+        ? 'disabled-by-env'
+        : 'not-configured',
+    backendUrl: config.backendUrl,
+    frontendUrl: config.frontendUrl,
+    notifyUrl: `${config.backendUrl}/api/payments/notify`,
+    ready: Boolean(
+      config.merchantId &&
+      config.merchantKey &&
+      (config.testMode || !config.usingKnownSandboxCredentials)
+    )
+  });
+});
+
 // Create a payment
 router.post('/create', optionalAuth, async (req, res) => {
   try {
@@ -64,26 +133,24 @@ router.post('/create', optionalAuth, async (req, res) => {
     // ID number no longer collected; skip validation
     
     // Validate PayFast configuration
-    const testMode = process.env.PAYFAST_TEST_MODE === 'true';
-    const merchantId = process.env.PAYFAST_MERCHANT_ID;
-    const merchantKey = process.env.PAYFAST_MERCHANT_KEY;
-    // Important: Only use passphrase if it's actually set and non-empty
-    // Check for undefined, null, empty string, or whitespace-only
-    const rawPassphrase = process.env.PAYFAST_PASSPHRASE;
-    // Debug: allow forcing no passphrase via env for testing
-    const forceNoPassphrase = process.env.PAYFAST_NO_PASSPHRASE === 'true';
-    const passphrase = (forceNoPassphrase) 
-      ? '' 
-      : (rawPassphrase && typeof rawPassphrase === 'string' && rawPassphrase.trim().length > 0) 
-        ? rawPassphrase.trim() 
-        : '';
+    const {
+      testMode,
+      merchantId,
+      merchantKey,
+      passphrase,
+      forceNoPassphrase,
+      hasRawPassphrase,
+      frontendUrl,
+      backendUrl,
+      usingKnownSandboxCredentials
+    } = getPayFastConfig(req);
     
     console.log('⚙️ PayFast Configuration Check:');
     console.log(`  Test Mode: ${testMode ? '✓ SANDBOX' : '✗ LIVE'}`);
     console.log(`  Merchant ID: ${merchantId ? '✓ Set' : '✗ MISSING'}`);
     console.log(`  Merchant Key: ${merchantKey ? '✓ Set' : '✗ MISSING'}`);
-    console.log(`  Passphrase raw: "${rawPassphrase}" (type: ${typeof rawPassphrase})`);
-    console.log(`  Passphrase trimmed: "${passphrase}" (length: ${passphrase.length})`);
+    console.log(`  Passphrase env set: ${hasRawPassphrase ? 'YES' : 'NO'}`);
+    console.log(`  No-passphrase override: ${forceNoPassphrase ? 'YES' : 'NO'}`);
     console.log(`  Passphrase will be used: ${passphrase.length > 0 ? 'YES' : 'NO'}`);
     
     if (!merchantId || !merchantKey) {
@@ -94,11 +161,13 @@ router.post('/create', optionalAuth, async (req, res) => {
       });
     }
     
-    // Get frontend URL from environment or request origin
-    const frontendUrl = process.env.FRONTEND_URL || req.headers.origin || 'https://vitejsviteeadmfezy-esxh--5173--1db57326.local-credentialless.webcontainer.io';
-    // For PayFast callbacks, use the actual Render backend URL (not the custom domain)
-    // PayFast needs to reach the backend directly, not through a proxy/CDN
-    const backendUrl = process.env.PAYFAST_BACKEND_URL || process.env.BACKEND_URL || 'https://snuggleup-backend.onrender.com';
+    if (!testMode && usingKnownSandboxCredentials) {
+      console.error('PayFast live mode is using sandbox credentials. Refusing payment creation.');
+      return res.status(500).json({
+        error: 'Payment gateway is still using sandbox credentials',
+        details: 'Set live PAYFAST_MERCHANT_ID and PAYFAST_MERCHANT_KEY before accepting production payments.'
+      });
+    }
     
     // Generate unique master order number (used for payment ID)
     const orderNumber = `ORDER-${Date.now()}`;
@@ -310,13 +379,17 @@ router.post('/create', optionalAuth, async (req, res) => {
 // Debug: Test signature against PayFast validation endpoint
 router.post('/test-signature', async (req, res) => {
   try {
+    if (!isPayFastTestMode() && !isPayFastDebugLogging()) {
+      return res.status(404).json({ error: 'Not found' });
+    }
+
     const { formData } = req.body;
     
     console.log('🧪 TESTING SIGNATURE AGAINST PAYFAST');
     console.log('📊 Form data received:', formData);
     
     // Generate signature using our method
-    const passphrase = ''; // No passphrase for sandbox
+    const { passphrase } = getPayFastPassphrase();
     const signature = generateSignature(formData, passphrase);
     console.log('✅ Our generated signature:', signature);
     
@@ -410,13 +483,7 @@ router.post('/notify', async (req, res) => {
     delete params.signature; // Exclude from signing
 
     // 1. Recreate signature locally using same passphrase logic
-    const rawPassphrase = process.env.PAYFAST_PASSPHRASE;
-    const forceNoPassphrase = process.env.PAYFAST_NO_PASSPHRASE === 'true';
-    const passphrase = (forceNoPassphrase) 
-      ? '' 
-      : (rawPassphrase && typeof rawPassphrase === 'string' && rawPassphrase.trim().length > 0) 
-        ? rawPassphrase.trim() 
-        : '';
+    const { passphrase } = getPayFastPassphrase();
     
     // IMPORTANT: For IPN validation, we must use the EXACT fields PayFast sends
     // NOT the form submission fields. Build signature string exactly as PayFast does:
@@ -553,11 +620,13 @@ function generateSignature(data, passphrase = '') {
   );
 
   console.log('🔍 Fields being signed (PayFast form order - URL encoded with + for spaces):');
+  if (isPayFastDebugLogging()) {
   signingKeys.forEach(key => {
     const encodedValue = encodeURIComponent(String(signatureData[key])).replace(/%20/g, '+');
     const displayValue = encodedValue.substring(0, 80) + (encodedValue.length > 80 ? '...' : '');
     console.log(`  ${key}=${displayValue}`);
   });
+  }
 
   // Build signature string WITH URL ENCODING and replace spaces with '+' per PayFast docs
   const signatureString = signingKeys
@@ -577,16 +646,18 @@ function generateSignature(data, passphrase = '') {
     console.log('ℹ️ No passphrase - signature string without passphrase');
   }
 
-  console.log('🔐 FULL Signature string:');
-  console.log(finalString);
-  console.log('🔐 String length:', finalString.length);
+  if (isPayFastDebugLogging()) {
+    console.log('FULL PayFast signature string:');
+    console.log(finalString);
+  }
+  console.log('PayFast signature string length:', finalString.length);
 
   const hash = crypto
     .createHash('md5')
     .update(finalString)
     .digest('hex');
 
-  console.log('🔐 MD5 hash:', hash);
+  console.log('PayFast form signature hash generated');
 
   return hash;
 }
@@ -613,8 +684,10 @@ function generateSignatureFromIPNData(params, passphrase = '') {
       const val = encodeURIComponent(String(value)).replace(/%20/g, '+');
       signatureString += `${key}=${val}&`;
       processedKeys.push(key);
-      const displayVal = value === '' ? '""' : val.substring(0, 80);
+      if (isPayFastDebugLogging()) {
+        const displayVal = value === '' ? '""' : val.substring(0, 80);
       console.log(`  ✓ ${key}=${displayVal}`);
+      }
     } else {
       console.log(`  ✗ ${key}=null (skipped - undefined/null)`);
     }
@@ -633,15 +706,17 @@ function generateSignatureFromIPNData(params, passphrase = '') {
     console.log('ℹ️ No passphrase used');
   }
   
-  console.log('🔐 FULL IPN Signature string:', finalString);
-  console.log('🔐 String length:', finalString.length);
+  if (isPayFastDebugLogging()) {
+    console.log('FULL PayFast IPN signature string:', finalString);
+  }
+  console.log('PayFast IPN signature string length:', finalString.length);
   
   const hash = crypto
     .createHash('md5')
     .update(finalString)
     .digest('hex');
 
-  console.log('🔐 MD5 hash (IPN):', hash);
+  console.log('PayFast IPN signature hash generated');
 
   return hash;
 }
