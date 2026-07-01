@@ -114,6 +114,8 @@ async function initDb() {
   
   // Email tracking - prevent duplicate confirmation emails on PayFast IPN retries
   await pool.query(`ALTER TABLE orders ADD COLUMN IF NOT EXISTS sent_confirmation BOOLEAN DEFAULT FALSE;`);
+  await pool.query(`ALTER TABLE orders ADD COLUMN IF NOT EXISTS owner_order_email_sent BOOLEAN DEFAULT FALSE;`);
+  await pool.query(`ALTER TABLE orders ADD COLUMN IF NOT EXISTS owner_order_sms_sent BOOLEAN DEFAULT FALSE;`);
 
   // Bob Go tracking fields. Shipments are still created manually in Bob Go;
   // these fields let Bob Go webhooks update customer-facing tracking.
