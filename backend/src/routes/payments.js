@@ -4,6 +4,7 @@ import fetch from 'node-fetch';
 import { authenticateToken } from '../middleware/auth.js';
 import { createOrder, updateOrderStatus, getOrderByNumber } from './orders.js';
 import { sendBrandedOrderConfirmationEmail } from '../services/orderConfirmationEmail.js';
+import { notifyOwnerOfNewOrder } from '../services/ownerOrderNotifications.js';
 
 export const router = express.Router();
 
@@ -171,27 +172,30 @@ router.post('/create', optionalAuth, async (req, res) => {
     
     // Generate unique master order number (used for payment ID)
     const orderNumber = `ORDER-${Date.now()}`;
+    const cartOrderItems = Array.isArray(orderItems) ? orderItems : [];
+    const localOrderItems = cartOrderItems.filter(i => i.isLocal);
+    const importOrderItems = cartOrderItems.filter(i => !i.isLocal);
 
-    // Validate stock availability before payment - use CN total (CJ + factory) like storefront does
-    if (orderItems && orderItems.length > 0) {
-      const productIds = orderItems.map(item => {
+    // Validate stock availability before payment. Local warehouse items and import
+    // items live in different tables, so keep those checks separate.
+    if (cartOrderItems.length > 0) {
+      const { default: pool } = await import('../db.js');
+      const importProductIds = importOrderItems.map(item => {
         const id = String(item.id || '').replace('curated-', '');
         return parseInt(id);
       }).filter(id => !isNaN(id));
       
-      if (productIds.length > 0) {
-        const { default: pool } = await import('../db.js');
+      if (importProductIds.length > 0) {
         const stockResult = await pool.query(`
           SELECT 
             cp.id,
             cp.product_name,
-            COALESCE(SUM(cpi.total_inventory), 0) as cn_total_stock
+            COALESCE(SUM(CASE WHEN cpi.country_code = 'CN' THEN cpi.total_inventory ELSE 0 END), 0) as cn_total_stock
           FROM curated_products cp
           LEFT JOIN curated_product_inventories cpi ON cp.id = cpi.curated_product_id
           WHERE cp.id = ANY($1::int[])
-            AND cpi.country_code = 'CN'
           GROUP BY cp.id, cp.product_name
-        `, [productIds]);
+        `, [importProductIds]);
         
         const soldOutItems = [];
         for (const row of stockResult.rows) {
@@ -210,6 +214,39 @@ router.post('/create', optionalAuth, async (req, res) => {
           });
         }
       }
+
+      const localProductIds = localOrderItems.map(item => parseInt(item.id)).filter(id => !isNaN(id));
+
+      if (localProductIds.length > 0) {
+        const stockResult = await pool.query(`
+          SELECT id, name, stock_quantity, is_active
+          FROM local_products
+          WHERE id = ANY($1::int[])
+        `, [localProductIds]);
+        const stockById = new Map(stockResult.rows.map(row => [Number(row.id), row]));
+        const soldOutItems = [];
+
+        for (const item of localOrderItems) {
+          const productId = parseInt(item.id);
+          if (Number.isNaN(productId)) continue;
+
+          const row = stockById.get(productId);
+          const requestedQty = Math.max(1, Number(item.quantity || 1));
+          const availableQty = Number(row?.stock_quantity || 0);
+
+          if (!row || row.is_active === false || availableQty < requestedQty) {
+            soldOutItems.push(item.name || row?.name || `Product ${productId}`);
+          }
+        }
+
+        if (soldOutItems.length > 0) {
+          return res.status(400).json({
+            error: 'Cannot complete payment - some local items are sold out',
+            soldOutItems,
+            message: `The following local items are no longer available in the requested quantity: ${soldOutItems.join(', ')}. Please adjust your cart and try again.`
+          });
+        }
+      }
     }
 
     // Create order records in database (split local vs import)
@@ -225,9 +262,6 @@ router.post('/create', optionalAuth, async (req, res) => {
       customerName: (shippingDetails && shippingDetails.customerName) || req.user?.name || undefined,
     };
 
-    // split items
-    const localOrderItems = (orderItems || []).filter(i => i.isLocal);
-    const importOrderItems = (orderItems || []).filter(i => !i.isLocal);
     const totalSubtotal = (subtotal || 0);
     // derive subtotals if not provided
     const localSubtotal = localOrderItems.reduce((sum,i) => sum + (i.price*i.quantity),0);
@@ -520,7 +554,24 @@ router.post('/notify', async (req, res) => {
       // find all orders whose number starts with the master ID
       const pool = (await import('../db.js')).default;
       const { rows: matching } = await pool.query(
-        `SELECT order_number, customer_email, total, items, customer_name FROM orders WHERE order_number LIKE $1`,
+        `SELECT
+          id,
+          order_number,
+          customer_email,
+          total,
+          items,
+          customer_name,
+          shipping_address,
+          shipping_city,
+          shipping_province,
+          shipping_postal_code,
+          shipping_phone,
+          shipping_method,
+          sent_confirmation,
+          owner_order_email_sent,
+          owner_order_sms_sent
+        FROM orders
+        WHERE order_number LIKE $1`,
         [orderNumber + '%']
       );
 
@@ -528,7 +579,7 @@ router.post('/notify', async (req, res) => {
         // update each matching order and send its own email
         for (const ord of matching) {
           await updateOrderStatus(ord.order_number, 'paid', payfastPaymentId);
-          if (ord.customer_email) {
+          if (ord.customer_email && !ord.sent_confirmation) {
             try {
               const items = Array.isArray(ord.items)
                 ? ord.items
@@ -556,6 +607,45 @@ router.post('/notify', async (req, res) => {
             } catch (e) {
               console.warn('Order confirmation email failed for', ord.order_number, e.message);
             }
+          }
+
+          const ownerResults = await notifyOwnerOfNewOrder({
+            order: ord,
+            sendEmail: !ord.owner_order_email_sent,
+            sendSms: !ord.owner_order_sms_sent
+          });
+
+          if (ownerResults.email?.success) {
+            await pool.query(
+              'UPDATE orders SET owner_order_email_sent = TRUE WHERE order_number = $1',
+              [ord.order_number]
+            );
+            console.log('[owner-order-email] sent', {
+              orderNumber: ord.order_number,
+              to: ownerResults.email.to
+            });
+          } else if (ownerResults.email && !ownerResults.email.skipped) {
+            console.warn('[owner-order-email] failed', {
+              orderNumber: ord.order_number,
+              error: ownerResults.email.error
+            });
+          }
+
+          if (ownerResults.sms?.success) {
+            await pool.query(
+              'UPDATE orders SET owner_order_sms_sent = TRUE WHERE order_number = $1',
+              [ord.order_number]
+            );
+            console.log('[owner-order-sms] sent', {
+              orderNumber: ord.order_number,
+              mobileNumber: ownerResults.sms.mobileNumber,
+              creditCost: ownerResults.sms.creditCost
+            });
+          } else if (ownerResults.sms && !ownerResults.sms.skipped) {
+            console.warn('[owner-order-sms] failed', {
+              orderNumber: ord.order_number,
+              error: ownerResults.sms.error
+            });
           }
         }
       } else if (paymentStatus === 'FAILED' || paymentStatus === 'PENDING') {
