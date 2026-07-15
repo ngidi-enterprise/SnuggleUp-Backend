@@ -13,20 +13,10 @@ const publicSelect = `
   id,
   order_number,
   items,
-  customer_name,
-  shipping_city,
-  shipping_province,
-  shipping_postal_code,
-  shipping_method,
-  bob_tracking_reference,
-  bob_tracking_url,
-  bob_courier_name,
-  cj_tracking_number,
   supplier_pickup_status,
   supplier_pickup_confirmed_at,
   supplier_pickup_updated_at,
-  supplier_pickup_notes,
-  supplier_waybill_url
+  supplier_pickup_notes
 `;
 
 async function findOrderByToken(token) {
