@@ -117,6 +117,14 @@ async function initDb() {
   await pool.query(`ALTER TABLE orders ADD COLUMN IF NOT EXISTS owner_order_email_sent BOOLEAN DEFAULT FALSE;`);
   await pool.query(`ALTER TABLE orders ADD COLUMN IF NOT EXISTS owner_order_sms_sent BOOLEAN DEFAULT FALSE;`);
 
+  // Customer-reported late delivery/pickup flags for admin follow-up.
+  await pool.query(`ALTER TABLE orders ADD COLUMN IF NOT EXISTS late_order_flagged_at TIMESTAMP;`);
+  await pool.query(`ALTER TABLE orders ADD COLUMN IF NOT EXISTS late_order_flag_count INTEGER DEFAULT 0;`);
+  await pool.query(`ALTER TABLE orders ADD COLUMN IF NOT EXISTS late_order_flag_status TEXT;`);
+  await pool.query(`ALTER TABLE orders ADD COLUMN IF NOT EXISTS late_order_flag_notified_at TIMESTAMP;`);
+  await pool.query(`ALTER TABLE orders ADD COLUMN IF NOT EXISTS late_order_flag_email_last_error TEXT;`);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_orders_late_order_flagged_at ON orders(late_order_flagged_at) WHERE late_order_flagged_at IS NOT NULL;`);
+
   // Bob Go tracking fields. Shipments are still created manually in Bob Go;
   // these fields let Bob Go webhooks update customer-facing tracking.
   await pool.query(`ALTER TABLE orders ADD COLUMN IF NOT EXISTS bob_shipment_id TEXT;`);
@@ -134,6 +142,18 @@ async function initDb() {
   await pool.query(`ALTER TABLE orders ADD COLUMN IF NOT EXISTS bob_last_webhook_topic TEXT;`);
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_orders_bob_tracking_reference ON orders(bob_tracking_reference);`);
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_orders_bob_shipment_id ON orders(bob_shipment_id);`);
+
+  // Supplier handoff confirmation. The supplier opens a private tokenized link,
+  // taps one large action, and the order records whether the parcel left them.
+  await pool.query(`ALTER TABLE orders ADD COLUMN IF NOT EXISTS supplier_pickup_token TEXT;`);
+  await pool.query(`ALTER TABLE orders ADD COLUMN IF NOT EXISTS supplier_pickup_status TEXT DEFAULT 'waiting';`);
+  await pool.query(`ALTER TABLE orders ADD COLUMN IF NOT EXISTS supplier_pickup_confirmed_at TIMESTAMP;`);
+  await pool.query(`ALTER TABLE orders ADD COLUMN IF NOT EXISTS supplier_pickup_updated_at TIMESTAMP;`);
+  await pool.query(`ALTER TABLE orders ADD COLUMN IF NOT EXISTS supplier_pickup_notes TEXT;`);
+  await pool.query(`ALTER TABLE orders ADD COLUMN IF NOT EXISTS supplier_pickup_last_sent_at TIMESTAMP;`);
+  await pool.query(`ALTER TABLE orders ADD COLUMN IF NOT EXISTS supplier_waybill_url TEXT;`);
+  await pool.query(`CREATE UNIQUE INDEX IF NOT EXISTS idx_orders_supplier_pickup_token ON orders(supplier_pickup_token) WHERE supplier_pickup_token IS NOT NULL;`);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_orders_supplier_pickup_status ON orders(supplier_pickup_status);`);
   
   // Migration: Change user_id from INTEGER to TEXT for Supabase UUID compatibility
   try {

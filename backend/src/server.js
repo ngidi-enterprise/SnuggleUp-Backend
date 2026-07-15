@@ -15,6 +15,9 @@ import { router as shippingRouter } from './routes/shipping.js';
 import { router as reviewsRouter } from './routes/reviews.js';
 import { router as localProductsRouter } from './routes/localProducts.js';
 import { router as bobRouter } from './routes/bob.js';
+import { router as discountsRouter } from './routes/discounts.js';
+import { router as seoRouter } from './routes/seo.js';
+import { router as supplierPickupRouter } from './routes/supplierPickup.js';
 import { cjClient } from './services/cjClient.js';
 import { syncCuratedInventory } from './services/inventorySync.js';
 import { syncProductPrices } from './services/priceSync.js';
@@ -79,6 +82,7 @@ app.use(express.urlencoded({ extended: false, limit: '50mb' }));
 app.use(express.json({ limit: '50mb' }));
 
 // Routes
+app.use('/', seoRouter); // SEO discovery: robots.txt and dynamic sitemap.xml
 app.use('/api/auth', authRouter); // Authentication
 app.use('/api/payments', paymentsRouter);
 app.use('/api/cj', cjRouter);
@@ -88,9 +92,11 @@ app.use('/api/products', productsRouter); // Public curated products
 app.use('/api/cart', cartRouter); // Cart persistence
 app.use('/api/orders', ordersRouter); // Order history
 app.use('/api/shipping', shippingRouter); // Shipping quotes
+app.use('/api/discounts', discountsRouter); // Discount and voucher codes
 app.use('/api/reviews', reviewsRouter); // Customer reviews
 app.use('/api/local-products', localProductsRouter); // Local warehouse inventory
 app.use('/api/bob', bobRouter); // Bob Go integration endpoints
+app.use('/api/supplier-pickup', supplierPickupRouter); // Tokenized supplier handoff confirmation
 
 // Health check (legacy)
 app.get('/health', (req, res) => {
