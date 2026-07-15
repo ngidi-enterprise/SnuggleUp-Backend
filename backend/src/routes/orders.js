@@ -2,24 +2,12 @@ import express from 'express';
 import db from '../db.js';
 import { authenticateToken } from '../middleware/auth.js';
 import { verifyTrackingToken } from '../services/trackingLinks.js';
+import { sendOwnerLateOrderFlagEmail } from '../services/ownerOrderNotifications.js';
+import { generateSupplierPickupToken } from '../services/supplierPickup.js';
 
 export const router = express.Router();
 
-const parseOrderForResponse = (order) => {
-  if (!order) return null;
-  const parsed = { ...order };
-  try { parsed.items = JSON.parse(parsed.items); } catch { parsed.items = []; }
-  parsed.bob_tracking_events = Array.isArray(parsed.bob_tracking_events) ? parsed.bob_tracking_events : [];
-  return parsed;
-};
-
-// Get all orders for logged-in user
-router.get('/history', authenticateToken, async (req, res) => {
-  try {
-    const userId = req.user.userId;
-
-    const { rows } = await db.query(
-      `SELECT
+const publicTrackingSelect = `
         id,
         order_number,
         total,
@@ -45,7 +33,27 @@ router.get('/history', authenticateToken, async (req, res) => {
         bob_tracking_updated_at,
         cj_tracking_number,
         cj_tracking_url,
-        cj_status
+        cj_status,
+        late_order_flagged_at,
+        late_order_flag_count,
+        late_order_flag_status`;
+
+const parseOrderForResponse = (order) => {
+  if (!order) return null;
+  const parsed = { ...order };
+  try { parsed.items = JSON.parse(parsed.items); } catch { parsed.items = []; }
+  parsed.bob_tracking_events = Array.isArray(parsed.bob_tracking_events) ? parsed.bob_tracking_events : [];
+  return parsed;
+};
+
+// Get all orders for logged-in user
+router.get('/history', authenticateToken, async (req, res) => {
+  try {
+    const userId = req.user.userId;
+
+    const { rows } = await db.query(
+      `SELECT
+        ${publicTrackingSelect}
        FROM orders WHERE user_id = $1 ORDER BY created_at DESC`,
       [userId]
     );
@@ -73,32 +81,7 @@ router.post('/track', async (req, res) => {
 
     const result = await db.query(
       `SELECT
-        id,
-        order_number,
-        total,
-        status,
-        created_at,
-        updated_at,
-        items,
-        subtotal,
-        shipping,
-        discount,
-        shipping_method,
-        bob_shipment_id,
-        bob_tracking_reference,
-        bob_tracking_url,
-        bob_courier_name,
-        bob_provider_slug,
-        bob_service_level,
-        bob_tracking_status,
-        bob_health_status,
-        bob_health_status_reason,
-        bob_tracking_events,
-        bob_tracking_last_event_time,
-        bob_tracking_updated_at,
-        cj_tracking_number,
-        cj_tracking_url,
-        cj_status
+        ${publicTrackingSelect}
        FROM orders
        WHERE LOWER(order_number) = LOWER($1)
          AND LOWER(COALESCE(customer_email, '')) = $2
@@ -131,33 +114,8 @@ router.post('/track-link', async (req, res) => {
 
     const result = await db.query(
       `SELECT
-        id,
-        order_number,
-        total,
-        status,
-        created_at,
-        updated_at,
-        items,
-        subtotal,
-        shipping,
-        discount,
-        shipping_method,
         customer_email,
-        bob_shipment_id,
-        bob_tracking_reference,
-        bob_tracking_url,
-        bob_courier_name,
-        bob_provider_slug,
-        bob_service_level,
-        bob_tracking_status,
-        bob_health_status,
-        bob_health_status_reason,
-        bob_tracking_events,
-        bob_tracking_last_event_time,
-        bob_tracking_updated_at,
-        cj_tracking_number,
-        cj_tracking_url,
-        cj_status
+        ${publicTrackingSelect}
        FROM orders
        WHERE LOWER(order_number) = LOWER($1)
        LIMIT 1`,
@@ -175,6 +133,83 @@ router.post('/track-link', async (req, res) => {
   } catch (error) {
     console.error('Track order link error:', error);
     res.status(500).json({ error: 'Failed to retrieve tracking' });
+  }
+});
+
+router.post('/flag-late', async (req, res) => {
+  try {
+    const orderNumber = String(req.body?.orderNumber || '').replace(/^#/, '').trim();
+    const email = String(req.body?.email || '').trim().toLowerCase();
+    const token = String(req.body?.token || '').trim();
+
+    if (!orderNumber || (!email && !token)) {
+      return res.status(400).json({ error: 'Order number and tracking verification are required' });
+    }
+
+    const result = await db.query(
+      token
+        ? `SELECT * FROM orders WHERE LOWER(order_number) = LOWER($1) LIMIT 1`
+        : `SELECT * FROM orders
+           WHERE LOWER(order_number) = LOWER($1)
+             AND LOWER(COALESCE(customer_email, '')) = $2
+           LIMIT 1`,
+      token ? [orderNumber] : [orderNumber, email]
+    );
+
+    const order = result.rows[0];
+    if (!order || (token && !verifyTrackingToken({ orderNumber: order.order_number, email: order.customer_email, token }))) {
+      return res.status(404).json({ error: 'We could not verify that order for late-order reporting' });
+    }
+
+    const updateResult = await db.query(
+      `UPDATE orders
+       SET late_order_flagged_at = CURRENT_TIMESTAMP,
+           late_order_flag_count = COALESCE(late_order_flag_count, 0) + 1,
+           late_order_flag_status = 'open',
+           late_order_flag_email_last_error = NULL,
+           updated_at = CURRENT_TIMESTAMP
+       WHERE id = $1
+       RETURNING *`,
+      [order.id]
+    );
+
+    let updatedOrder = updateResult.rows[0];
+    const emailResult = await sendOwnerLateOrderFlagEmail({ order: updatedOrder });
+
+    if (emailResult.success) {
+      const notifiedResult = await db.query(
+        `UPDATE orders
+         SET late_order_flag_notified_at = CURRENT_TIMESTAMP,
+             late_order_flag_email_last_error = NULL
+         WHERE id = $1
+         RETURNING *`,
+        [updatedOrder.id]
+      );
+      updatedOrder = notifiedResult.rows[0] || updatedOrder;
+    } else if (!emailResult.skipped) {
+      const errorResult = await db.query(
+        `UPDATE orders
+         SET late_order_flag_email_last_error = $2
+         WHERE id = $1
+         RETURNING *`,
+        [updatedOrder.id, emailResult.error || 'Late-order email failed']
+      );
+      updatedOrder = errorResult.rows[0] || updatedOrder;
+    }
+
+    const publicResult = await db.query(
+      `SELECT ${publicTrackingSelect} FROM orders WHERE id = $1 LIMIT 1`,
+      [updatedOrder.id]
+    );
+
+    res.json({
+      success: true,
+      message: 'Thanks, our team will investigate and email you promptly.',
+      order: parseOrderForResponse(publicResult.rows[0]),
+    });
+  } catch (error) {
+    console.error('Flag late order error:', error);
+    res.status(500).json({ error: 'Failed to flag late order' });
   }
 });
 
@@ -246,6 +281,7 @@ export const createOrder = async (userId, orderData) => {
     const smsTrackingPhone = smsTrackingOptIn
       ? (shippingDetails?.smsTrackingPhone || shippingDetails?.phone || null)
       : null;
+    const supplierPickupToken = generateSupplierPickupToken();
     
     console.log('🔍 About to insert order with userId:', safeUserId, 'type:', typeof safeUserId);
     
@@ -254,9 +290,9 @@ export const createOrder = async (userId, orderData) => {
         user_id, order_number, items, subtotal, shipping, discount, total, customer_email, 
         shipping_country, shipping_method, insurance_selected, insurance_cost, insurance_coverage, 
         customer_name, shipping_address, shipping_city, shipping_province, shipping_postal_code, shipping_phone,
-        shipping_id_number, sms_tracking_opt_in, sms_tracking_phone, status
+        shipping_id_number, sms_tracking_opt_in, sms_tracking_phone, supplier_pickup_token, supplier_pickup_status, status
       )
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23) RETURNING id`,
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25) RETURNING id`,
       [
         safeUserId,
         orderNumber,
@@ -280,6 +316,8 @@ export const createOrder = async (userId, orderData) => {
         shippingDetails?.idNumber || null,
         smsTrackingOptIn,
         smsTrackingPhone,
+        supplierPickupToken,
+        'waiting',
         'pending'
       ]
     );

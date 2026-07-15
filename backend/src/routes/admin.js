@@ -8,6 +8,12 @@ import { generateProductDescription, getAvailableProviders } from '../services/d
 import { getOrderById, buildCJOrderData, updateOrderCJInfo, updateOrderBobTracking } from './orders.js';
 import { getSchedulerHealth, generateSchedulerReport, getExecutionHistory } from '../services/schedulerMonitor.js';
 import { notifyTrackingUpdateIfNeeded } from '../services/trackingNotifications.js';
+import {
+  buildSupplierPickupMessage,
+  buildSupplierWhatsappUrl,
+  ensureSupplierPickupToken,
+  supplierPickupFrontendUrl,
+} from '../services/supplierPickup.js';
 import crypto from 'crypto';
 
 export const router = express.Router();
@@ -1150,7 +1156,7 @@ router.put('/orders/:id/tracking', async (req, res) => {
       : undefined;
 
     const previousOrder = await getOrderById(id);
-    const updatedOrder = await updateOrderBobTracking(id, {
+    let updatedOrder = await updateOrderBobTracking(id, {
       bobShipmentId: textOrNull(req.body?.bobShipmentId),
       bobTrackingReference: textOrNull(req.body?.bobTrackingReference),
       bobTrackingUrl: textOrNull(req.body?.bobTrackingUrl),
@@ -1167,6 +1173,19 @@ router.put('/orders/:id/tracking', async (req, res) => {
       return res.status(404).json({ error: 'Order not found' });
     }
 
+    if (Object.prototype.hasOwnProperty.call(req.body || {}, 'supplierWaybillUrl')) {
+      const waybillResult = await pool.query(
+        `UPDATE orders
+         SET supplier_waybill_url = $1,
+             updated_at = CURRENT_TIMESTAMP
+         WHERE id = $2
+         RETURNING *`,
+        [textOrNull(req.body?.supplierWaybillUrl), id]
+      );
+      updatedOrder = waybillResult.rows[0] || updatedOrder;
+      try { updatedOrder.items = JSON.parse(updatedOrder.items); } catch {}
+    }
+
     notifyTrackingUpdateIfNeeded({
       previousOrder,
       updatedOrder,
@@ -1179,6 +1198,38 @@ router.put('/orders/:id/tracking', async (req, res) => {
   } catch (error) {
     console.error('[admin] Update Bob Go tracking error:', error);
     res.status(500).json({ error: 'Failed to update tracking' });
+  }
+});
+
+// Generate the no-login supplier pickup link and WhatsApp share URL for an order.
+router.post('/orders/:id/supplier-pickup-link', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const order = await ensureSupplierPickupToken(id);
+
+    if (!order) {
+      return res.status(404).json({ error: 'Order not found' });
+    }
+
+    const updatedResult = await pool.query(
+      `UPDATE orders
+       SET supplier_pickup_last_sent_at = CURRENT_TIMESTAMP
+       WHERE id = $1
+       RETURNING *`,
+      [id]
+    );
+    const updatedOrder = updatedResult.rows[0] || order;
+    const supplierPickupUrl = supplierPickupFrontendUrl(updatedOrder.supplier_pickup_token);
+
+    res.json({
+      order: updatedOrder,
+      supplierPickupUrl,
+      supplierWhatsappUrl: buildSupplierWhatsappUrl(updatedOrder, updatedOrder.supplier_pickup_token),
+      message: buildSupplierPickupMessage(updatedOrder, updatedOrder.supplier_pickup_token),
+    });
+  } catch (error) {
+    console.error('[admin] supplier pickup link error:', error);
+    res.status(500).json({ error: 'Failed to create supplier pickup link' });
   }
 });
 
