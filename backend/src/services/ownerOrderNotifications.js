@@ -252,6 +252,120 @@ Open admin: ${adminUrl}
   }
 };
 
+export const sendOwnerLateOrderFlagEmail = async ({ order }) => {
+  if (!ownerEmailEnabled()) {
+    return { success: false, skipped: true, reason: 'owner order email disabled' };
+  }
+
+  const to = ownerEmailAddress();
+  if (!to) {
+    return { success: false, skipped: true, reason: 'owner order email missing' };
+  }
+
+  const transporter = createTransporter();
+  if (!transporter) {
+    return { success: false, error: 'Email service not configured' };
+  }
+
+  const adminUrl = orderAdminUrl();
+  const address = buildAddressText(order);
+  const logoUrl = getLogoUrl();
+  const trackingRef = order?.bob_tracking_reference || order?.cj_tracking_number || '';
+  const trackingStatus = order?.bob_tracking_status || order?.cj_status || order?.status || 'Not available';
+  const flaggedAt = order?.late_order_flagged_at
+    ? new Date(order.late_order_flagged_at).toLocaleString('en-ZA')
+    : new Date().toLocaleString('en-ZA');
+  const flagCount = Number(order?.late_order_flag_count || 1);
+
+  const html = `
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <style>
+    body { margin: 0; padding: 0; background: #fff8ed; font-family: Arial, sans-serif; color: #1f2933; }
+    .container { max-width: 680px; margin: 0 auto; padding: 28px 16px; }
+    .card { background: #ffffff; border: 1px solid #f1d7aa; border-radius: 10px; overflow: hidden; }
+    .header { text-align: center; padding: 26px 28px 8px; }
+    .logo { max-width: 220px; width: 68%; height: auto; }
+    .content { padding: 0 32px 32px; }
+    h1 { color: #b45309; font-size: 24px; margin: 12px 0 8px; text-align: center; }
+    p { line-height: 1.55; font-size: 15px; }
+    .alert { background: #fff8ed; border: 1px solid #f1d7aa; border-radius: 8px; padding: 18px; margin: 22px 0; }
+    .label { color: #6b5b42; font-size: 13px; margin: 0 0 4px; }
+    .value { color: #126f71; font-size: 20px; font-weight: 700; margin: 0 0 14px; word-break: break-word; }
+    .button-wrap { text-align: center; margin: 26px 0 8px; }
+    .button { display: inline-block; background: #126f71; color: #ffffff !important; text-decoration: none; padding: 13px 28px; border-radius: 999px; font-weight: 700; }
+    .footer { color: #6b777a; font-size: 12px; text-align: center; padding: 18px 22px 26px; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="card">
+      <div class="header">
+        <img class="logo" src="${escapeHtml(logoUrl)}" alt="SnuggleUp Baby Store">
+      </div>
+      <div class="content">
+        <h1>Customer flagged a late order</h1>
+        <p>A customer used the tracking page to report a late delivery or pickup. Please investigate and email them promptly.</p>
+
+        <div class="alert">
+          <p class="label">Order number</p>
+          <p class="value">${escapeHtml(order?.order_number)}</p>
+          <p class="label">Flagged at</p>
+          <p class="value">${escapeHtml(flaggedAt)}</p>
+          <p>Report count: ${escapeHtml(flagCount)}</p>
+          <p>Customer: ${escapeHtml(order?.customer_name || 'Customer')}</p>
+          <p>Email: ${escapeHtml(order?.customer_email || 'Not provided')}</p>
+          ${order?.shipping_phone ? `<p>Phone: ${escapeHtml(order.shipping_phone)}</p>` : ''}
+          ${address ? `<p>Delivery address: ${escapeHtml(address)}</p>` : ''}
+          ${order?.shipping_method ? `<p>Delivery method: ${escapeHtml(order.shipping_method)}</p>` : ''}
+          <p>Tracking status: ${escapeHtml(trackingStatus)}</p>
+          ${trackingRef ? `<p>Tracking reference: ${escapeHtml(trackingRef)}</p>` : ''}
+        </div>
+
+        <div class="button-wrap">
+          <a class="button" href="${escapeHtml(adminUrl)}">Open admin panel</a>
+        </div>
+      </div>
+      <div class="footer">
+        <p>Late-order alert sent by SnuggleUp Baby Store.</p>
+      </div>
+    </div>
+  </div>
+</body>
+</html>
+  `.trim();
+
+  const text = `
+Customer flagged a late SnuggleUp order
+
+Order: ${order?.order_number}
+Flagged at: ${flaggedAt}
+Report count: ${flagCount}
+Customer: ${order?.customer_name || 'Customer'}
+Email: ${order?.customer_email || 'Not provided'}
+${order?.shipping_phone ? `Phone: ${order.shipping_phone}\n` : ''}${address ? `Address: ${address}\n` : ''}${order?.shipping_method ? `Delivery method: ${order.shipping_method}\n` : ''}Tracking status: ${trackingStatus}
+${trackingRef ? `Tracking reference: ${trackingRef}\n` : ''}Open admin: ${adminUrl}
+  `.trim();
+
+  try {
+    const info = await transporter.sendMail({
+      from: getFromAddress(),
+      replyTo: order?.customer_email || 'support@snuggleup.co.za',
+      to,
+      subject: `Late order flagged - ${order?.order_number}`,
+      text,
+      html,
+    });
+
+    return { success: true, messageId: info.messageId, to };
+  } catch (error) {
+    return { success: false, error: error.message, to };
+  }
+};
+
 export const sendOwnerNewOrderSms = async ({ order }) => {
   if (!ownerSmsEnabled()) {
     return { success: false, skipped: true, reason: 'owner order SMS disabled' };
