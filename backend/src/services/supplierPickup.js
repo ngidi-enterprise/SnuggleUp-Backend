@@ -38,29 +38,22 @@ function normalizeItems(items) {
   }
 }
 
-function itemSummary(order = {}) {
+function itemBulletLines(order = {}) {
   const items = normalizeItems(order.items);
-  if (items.length === 0) return 'Items listed on waybill';
+  if (items.length === 0) return ['- Items listed on order'];
   return items
-    .slice(0, 4)
-    .map(item => `${Number(item.quantity || 1)} x ${item.name || 'item'}`)
-    .join(', ');
+    .map(item => `- ${Number(item.quantity || 1)} x ${item.name || 'item'}`);
 }
 
 export function buildSupplierPickupMessage(order = {}, token = order.supplier_pickup_token) {
   const pickupUrl = supplierPickupFrontendUrl(token);
-  const trackingRef = order.bob_tracking_reference || order.cj_tracking_number || '';
-  const courier = order.bob_courier_name || order.shipping_method || 'Courier';
-  const waybillUrl = order.supplier_waybill_url || order.bob_tracking_url || '';
 
   return [
     `SnuggleUp order ${order.order_number || ''}`,
-    itemSummary(order),
-    trackingRef ? `Ref: ${trackingRef}` : '',
-    courier ? `Courier: ${courier}` : '',
-    waybillUrl ? `Waybill/tracking: ${waybillUrl}` : '',
+    'Items:',
+    ...itemBulletLines(order),
     '',
-    'Tap this link when the parcel leaves you:',
+    'Tap this SnuggleUp link when the parcel leaves you:',
     pickupUrl,
   ].filter(line => line !== '').join('\n');
 }
@@ -135,15 +128,6 @@ export function supplierPickupPayload(order = {}, summary = {}) {
       notes: order.supplier_pickup_notes || '',
       items,
       itemCount: items.reduce((sum, item) => sum + item.quantity, 0),
-      customerName: order.customer_name || '',
-      deliveryArea: [
-        order.shipping_city,
-        order.shipping_province,
-        order.shipping_postal_code,
-      ].filter(Boolean).join(', '),
-      courier: order.bob_courier_name || order.shipping_method || '',
-      trackingReference: order.bob_tracking_reference || order.cj_tracking_number || '',
-      waybillUrl: order.supplier_waybill_url || order.bob_tracking_url || '',
     },
     summary,
   };
