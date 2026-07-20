@@ -1307,6 +1307,39 @@ router.put('/users/:id/role', async (req, res) => {
   }
 });
 
+// Update a user's display details in the SnuggleUp user table.
+router.put('/users/:id/profile', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const name = String(req.body?.name || '').trim();
+    const phone = req.body?.phone === undefined ? undefined : String(req.body.phone || '').trim();
+
+    if (!name) {
+      return res.status(400).json({ error: 'Name is required' });
+    }
+
+    const result = await pool.query(
+      `
+        UPDATE users
+        SET name = $1,
+            phone = COALESCE($2, phone)
+        WHERE id = $3
+        RETURNING id, email, name, phone, is_admin, role, created_at
+      `,
+      [name, phone, id]
+    );
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: 'User not found' });
+    }
+
+    res.json({ user: result.rows[0] });
+  } catch (error) {
+    console.error('Update user profile error:', error);
+    res.status(500).json({ error: 'Failed to update user profile' });
+  }
+});
+
 // ============ BULK PRODUCT ADMIN ============
 
 // Soft-disable all curated products (reversible)
