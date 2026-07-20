@@ -180,8 +180,11 @@ async function initDb() {
     console.error('Full error:', err);
   }
 
-  // Admin role column
+  // Admin role columns. `support@snuggleup.co.za` is treated as the superuser
+  // in middleware even if the database row is missing.
   await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS is_admin BOOLEAN DEFAULT FALSE;`);
+  await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS role TEXT DEFAULT 'customer';`);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_users_role ON users(role);`);
 
   // Curated products table - stores selected CJ products with custom pricing
   await pool.query(`
@@ -347,6 +350,16 @@ async function initDb() {
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_local_products_category ON local_products(category);`);
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_local_products_sku ON local_products(sku);`);
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_local_products_active ON local_products(is_active);`);
+  await pool.query(`ALTER TABLE local_products ADD COLUMN IF NOT EXISTS approval_status TEXT DEFAULT 'approved';`);
+  await pool.query(`ALTER TABLE local_products ADD COLUMN IF NOT EXISTS submitted_by_user_id TEXT;`);
+  await pool.query(`ALTER TABLE local_products ADD COLUMN IF NOT EXISTS submitted_by_email TEXT;`);
+  await pool.query(`ALTER TABLE local_products ADD COLUMN IF NOT EXISTS approved_by_email TEXT;`);
+  await pool.query(`ALTER TABLE local_products ADD COLUMN IF NOT EXISTS approved_at TIMESTAMP;`);
+  await pool.query(`ALTER TABLE local_products ADD COLUMN IF NOT EXISTS assistant_notification_read BOOLEAN DEFAULT FALSE;`);
+  await pool.query(`ALTER TABLE local_products ADD COLUMN IF NOT EXISTS review_notes TEXT;`);
+  await pool.query(`UPDATE local_products SET approval_status = 'approved' WHERE approval_status IS NULL;`);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_local_products_approval_status ON local_products(approval_status);`);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_local_products_submitted_by_email ON local_products(submitted_by_email);`);
   
   console.log('✅ PostgreSQL database initialized successfully');
 }
