@@ -1,7 +1,8 @@
 import express from 'express';
 import bcrypt from 'bcryptjs';
 import db from '../db.js';
-import { generateToken } from '../middleware/auth.js';
+import { authenticateToken, generateToken } from '../middleware/auth.js';
+import { getUserAccess } from '../middleware/admin.js';
 
 export const router = express.Router();
 
@@ -150,6 +151,26 @@ router.post('/reset-password', async (req, res) => {
   } catch (error) {
     console.error('Reset password error:', error);
     res.status(500).json({ error: 'Failed to reset password' });
+  }
+});
+
+// Get current user profile
+router.get('/access', authenticateToken, async (req, res) => {
+  try {
+    const access = await getUserAccess(req);
+    res.json({
+      authenticated: true,
+      email: access.email,
+      role: access.role,
+      isSuperuser: access.isSuperuser,
+      isAdmin: access.isAdmin,
+      isProductAssistant: access.isProductAssistant,
+      canManageProducts: access.canManageProducts,
+      canApproveProducts: access.canApproveProducts,
+    });
+  } catch (error) {
+    console.error('Access check error:', error);
+    res.status(500).json({ error: 'Access check failed' });
   }
 });
 

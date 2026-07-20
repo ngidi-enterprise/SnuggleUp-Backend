@@ -219,7 +219,7 @@ router.post('/create', optionalAuth, async (req, res) => {
 
       if (localProductIds.length > 0) {
         const stockResult = await pool.query(`
-          SELECT id, name, stock_quantity, is_active
+          SELECT id, name, stock_quantity, is_active, approval_status
           FROM local_products
           WHERE id = ANY($1::int[])
         `, [localProductIds]);
@@ -234,7 +234,7 @@ router.post('/create', optionalAuth, async (req, res) => {
           const requestedQty = Math.max(1, Number(item.quantity || 1));
           const availableQty = Number(row?.stock_quantity || 0);
 
-          if (!row || row.is_active === false || availableQty < requestedQty) {
+          if (!row || row.is_active === false || row.approval_status !== 'approved' || availableQty < requestedQty) {
             soldOutItems.push(item.name || row?.name || `Product ${productId}`);
           }
         }

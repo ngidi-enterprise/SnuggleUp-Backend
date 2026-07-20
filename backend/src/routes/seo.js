@@ -96,6 +96,7 @@ router.get('/sitemap.xml', async (_req, res) => {
       SELECT id, name, updated_at, created_at
       FROM local_products
       WHERE is_active = TRUE
+        AND approval_status = 'approved'
       ORDER BY is_featured DESC, updated_at DESC NULLS LAST, created_at DESC
       LIMIT 5000
     `);
