@@ -66,6 +66,7 @@ router.get('/sitemap.xml', async (_req, res) => {
   const today = dateOnly();
   const urls = [
     { loc: `${frontendUrl}/`, lastmod: today, changefreq: 'daily', priority: '1.0' },
+    { loc: `${frontendUrl}/learning-centre`, lastmod: today, changefreq: 'weekly', priority: '0.8' },
     { loc: `${frontendUrl}/shipping`, lastmod: today, changefreq: 'monthly', priority: '0.5' },
     { loc: `${frontendUrl}/returns`, lastmod: today, changefreq: 'monthly', priority: '0.5' },
     { loc: `${frontendUrl}/privacy`, lastmod: today, changefreq: 'yearly', priority: '0.3' },
@@ -108,6 +109,22 @@ router.get('/sitemap.xml', async (_req, res) => {
         lastmod: dateOnly(product.updated_at || product.created_at),
         changefreq: 'weekly',
         priority: '0.85',
+      });
+    });
+
+    const articles = await pool.query(`
+      SELECT slug, published_at, updated_at, created_at
+      FROM learning_centre_articles
+      WHERE status = 'published' AND published_at <= CURRENT_TIMESTAMP
+      ORDER BY published_at DESC
+      LIMIT 5000
+    `);
+    articles.rows.forEach((article) => {
+      urls.push({
+        loc: `${frontendUrl}/learning-centre/${article.slug}`,
+        lastmod: dateOnly(article.updated_at || article.published_at || article.created_at),
+        changefreq: 'monthly',
+        priority: '0.75',
       });
     });
   } catch (error) {
