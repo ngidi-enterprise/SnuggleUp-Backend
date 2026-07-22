@@ -360,6 +360,57 @@ async function initDb() {
   await pool.query(`UPDATE local_products SET approval_status = 'approved' WHERE approval_status IS NULL;`);
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_local_products_approval_status ON local_products(approval_status);`);
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_local_products_submitted_by_email ON local_products(submitted_by_email);`);
+
+  // Learning Centre: topic queue, article drafts and cautious automation settings.
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS learning_centre_topics (
+      id SERIAL PRIMARY KEY,
+      title TEXT NOT NULL UNIQUE,
+      search_question TEXT,
+      category TEXT DEFAULT 'Parenting guides',
+      priority INTEGER DEFAULT 100,
+      status TEXT DEFAULT 'queued',
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    );
+  `);
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS learning_centre_articles (
+      id SERIAL PRIMARY KEY,
+      topic_id INTEGER REFERENCES learning_centre_topics(id) ON DELETE SET NULL,
+      title TEXT NOT NULL,
+      slug TEXT NOT NULL UNIQUE,
+      excerpt TEXT,
+      body_html TEXT NOT NULL,
+      meta_title TEXT,
+      meta_description TEXT,
+      category TEXT,
+      author_name TEXT DEFAULT 'SnuggleUp Baby Store',
+      status TEXT DEFAULT 'draft',
+      review_required BOOLEAN DEFAULT FALSE,
+      scheduled_for TIMESTAMP,
+      published_at TIMESTAMP,
+      last_reviewed_at TIMESTAMP,
+      product_links JSONB DEFAULT '[]',
+      internal_links JSONB DEFAULT '[]',
+      references JSONB DEFAULT '[]',
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    );
+  `);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_learning_articles_status ON learning_centre_articles(status);`);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_learning_articles_published_at ON learning_centre_articles(published_at DESC);`);
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS learning_centre_settings (
+      id INTEGER PRIMARY KEY DEFAULT 1 CHECK (id = 1),
+      automation_enabled BOOLEAN DEFAULT FALSE,
+      interval_days INTEGER DEFAULT 5,
+      low_risk_auto_publish BOOLEAN DEFAULT FALSE,
+      last_automation_run_at TIMESTAMP,
+      updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    );
+  `);
+  await pool.query(`INSERT INTO learning_centre_settings (id) VALUES (1) ON CONFLICT (id) DO NOTHING;`);
   
   console.log('✅ PostgreSQL database initialized successfully');
 }

@@ -18,6 +18,8 @@ import { router as bobRouter } from './routes/bob.js';
 import { router as discountsRouter } from './routes/discounts.js';
 import { router as seoRouter } from './routes/seo.js';
 import { router as supplierPickupRouter } from './routes/supplierPickup.js';
+import { router as learningCentreRouter } from './routes/learningCentre.js';
+import { startLearningCentreScheduler } from './services/learningCentreScheduler.js';
 import { cjClient } from './services/cjClient.js';
 import { syncCuratedInventory } from './services/inventorySync.js';
 import { syncProductPrices } from './services/priceSync.js';
@@ -97,6 +99,7 @@ app.use('/api/reviews', reviewsRouter); // Customer reviews
 app.use('/api/local-products', localProductsRouter); // Local warehouse inventory
 app.use('/api/bob', bobRouter); // Bob Go integration endpoints
 app.use('/api/supplier-pickup', supplierPickupRouter); // Tokenized supplier handoff confirmation
+app.use('/api/learning-centre', learningCentreRouter); // Learning Centre articles and superuser tools
 
 // Health check (legacy)
 app.get('/health', (req, res) => {
@@ -262,6 +265,7 @@ app.get('/api/health', async (req, res) => {
 });
 
 app.listen(port, () => {
+  startLearningCentreScheduler();
   console.log(`Server running on port ${port}`);
   
   // Smart CJ inventory sync: adapts to shopping patterns
