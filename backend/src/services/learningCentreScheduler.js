@@ -4,6 +4,24 @@ import { sendLearningCentreReportEmail } from './learningCentreEmail.js';
 
 let running = false;
 
+export async function publishDueLearningArticles() {
+  const result = await pool.query(`
+    UPDATE learning_centre_articles
+    SET status = 'published', published_at = CURRENT_TIMESTAMP, last_reviewed_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP
+    WHERE status = 'scheduled'
+      AND scheduled_for IS NOT NULL
+      AND scheduled_for <= CURRENT_TIMESTAMP
+    RETURNING *
+  `);
+
+  await Promise.all(result.rows.map((article) => sendLearningCentreReportEmail({
+    article,
+    action: 'published on its schedule',
+  }).catch((error) => console.error('[learning-centre] scheduled publish email failed:', error.message))));
+
+  return result.rows;
+}
+
 export async function runLearningCentreAutomation({ force = false } = {}) {
   if (running) return { skipped: true, reason: 'A Learning Centre run is already in progress' };
   running = true;
@@ -36,7 +54,15 @@ export async function runLearningCentreAutomation({ force = false } = {}) {
 
 export function startLearningCentreScheduler() {
   if (process.env.LEARNING_CENTRE_SCHEDULER_DISABLED === 'true') return;
-  setTimeout(() => runLearningCentreAutomation().catch((error) => console.error('[learning-centre] scheduled run failed:', error.message)), 20000);
-  setInterval(() => runLearningCentreAutomation().catch((error) => console.error('[learning-centre] scheduled run failed:', error.message)), 6 * 60 * 60 * 1000);
-  console.log('Learning Centre scheduler is active; it checks every 6 hours.');
+  const tick = async () => {
+    try {
+      await publishDueLearningArticles();
+      await runLearningCentreAutomation();
+    } catch (error) {
+      console.error('[learning-centre] scheduled run failed:', error.message);
+    }
+  };
+  setTimeout(tick, 20000);
+  setInterval(tick, 15 * 60 * 1000);
+  console.log('Learning Centre scheduler is active; it checks every 15 minutes.');
 }
