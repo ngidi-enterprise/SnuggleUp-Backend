@@ -1140,6 +1140,76 @@ router.put('/orders/:id', async (req, res) => {
   }
 });
 
+// Privacy-safe storefront traffic and engagement. This deliberately excludes
+// customer identity and financial data; orders remain in the existing analytics endpoint.
+router.get('/traffic-insights', async (_req, res) => {
+  try {
+    const [summaryResult, sourcesResult, pagesResult, productsResult, hourlyResult] = await Promise.all([
+      pool.query(`
+        SELECT
+          COUNT(DISTINCT visitor_id) AS visitors,
+          COUNT(DISTINCT session_id) AS sessions,
+          COUNT(*) FILTER (WHERE event_name = 'page_view') AS page_views,
+          COUNT(*) FILTER (WHERE event_name = 'product_view') AS product_views,
+          COALESCE(ROUND(AVG(duration_seconds) FILTER (WHERE event_name = 'page_exit' AND duration_seconds IS NOT NULL)), 0) AS average_seconds
+        FROM storefront_analytics_events
+        WHERE occurred_at >= NOW() - INTERVAL '30 days'
+      `),
+      pool.query(`
+        SELECT
+          COALESCE(NULLIF(source, ''), CASE WHEN referrer_host IS NULL OR referrer_host = '' THEN 'Direct' ELSE referrer_host END) AS source,
+          COALESCE(NULLIF(medium, ''), 'organic / referral') AS medium,
+          COUNT(DISTINCT session_id) AS sessions
+        FROM storefront_analytics_events
+        WHERE event_name = 'session_start' AND occurred_at >= NOW() - INTERVAL '30 days'
+        GROUP BY 1, 2
+        ORDER BY sessions DESC
+        LIMIT 8
+      `),
+      pool.query(`
+        SELECT page_path, MAX(page_title) AS page_title, COUNT(*) AS views
+        FROM storefront_analytics_events
+        WHERE event_name = 'page_view' AND occurred_at >= NOW() - INTERVAL '30 days'
+        GROUP BY page_path
+        ORDER BY views DESC
+        LIMIT 10
+      `),
+      pool.query(`
+        SELECT product_id, MAX(product_name) AS product_name, MAX(product_category) AS product_category,
+               COUNT(*) FILTER (WHERE event_name = 'product_view') AS views,
+               COUNT(*) FILTER (WHERE event_name = 'product_click') AS clicks,
+               COUNT(*) FILTER (WHERE event_name = 'add_to_cart') AS add_to_cart
+        FROM storefront_analytics_events
+        WHERE product_id IS NOT NULL AND occurred_at >= NOW() - INTERVAL '30 days'
+        GROUP BY product_id
+        ORDER BY views DESC, clicks DESC
+        LIMIT 10
+      `),
+      pool.query(`
+        SELECT EXTRACT(HOUR FROM (occurred_at AT TIME ZONE 'UTC' AT TIME ZONE 'Africa/Johannesburg'))::int AS hour, COUNT(DISTINCT session_id) AS sessions
+        FROM storefront_analytics_events
+        WHERE occurred_at >= NOW() - INTERVAL '30 days'
+        GROUP BY 1
+        ORDER BY sessions DESC, hour ASC
+        LIMIT 6
+      `),
+    ]);
+
+    res.json({
+      period: 'Last 30 days',
+      summary: summaryResult.rows[0] || {},
+      sources: sourcesResult.rows,
+      pages: pagesResult.rows,
+      products: productsResult.rows,
+      popularHours: hourlyResult.rows,
+      timeZone: 'Africa/Johannesburg',
+    });
+  } catch (error) {
+    console.error('Traffic insights error:', error.message);
+    res.status(500).json({ error: 'Unable to load traffic insights' });
+  }
+});
+
 // Link or update Bob Go tracking for an order.
 // The Bob Go shipment is still created manually; this only stores the reference
 // and gives webhooks a reliable way to update the customer-facing timeline.
