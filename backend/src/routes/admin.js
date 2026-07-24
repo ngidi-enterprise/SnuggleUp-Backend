@@ -1144,7 +1144,7 @@ router.put('/orders/:id', async (req, res) => {
 // customer identity and financial data; orders remain in the existing analytics endpoint.
 router.get('/traffic-insights', async (_req, res) => {
   try {
-    const [summaryResult, sourcesResult, pagesResult, productsResult, hourlyResult] = await Promise.all([
+    const [summaryResult, sourcesResult, regionsResult, pagesResult, productsResult, hourlyResult, funnelResult, purchasesResult] = await Promise.all([
       pool.query(`
         SELECT
           COUNT(DISTINCT visitor_id) AS visitors,
@@ -1165,6 +1165,20 @@ router.get('/traffic-insights', async (_req, res) => {
         GROUP BY 1, 2
         ORDER BY sessions DESC
         LIMIT 8
+      `),
+      pool.query(`
+        SELECT
+          country_code,
+          timezone_name,
+          MAX(browser_locale) AS browser_locale,
+          COUNT(DISTINCT session_id) AS sessions
+        FROM storefront_analytics_events
+        WHERE event_name = 'session_start'
+          AND occurred_at >= NOW() - INTERVAL '30 days'
+          AND (country_code IS NOT NULL OR timezone_name IS NOT NULL)
+        GROUP BY country_code, timezone_name
+        ORDER BY sessions DESC
+        LIMIT 12
       `),
       pool.query(`
         SELECT page_path, MAX(page_title) AS page_title, COUNT(*) AS views
@@ -1193,15 +1207,58 @@ router.get('/traffic-insights', async (_req, res) => {
         ORDER BY sessions DESC, hour ASC
         LIMIT 6
       `),
+      pool.query(`
+        SELECT
+          COUNT(DISTINCT session_id) FILTER (WHERE event_name = 'session_start') AS visitors,
+          COUNT(DISTINCT session_id) FILTER (WHERE event_name = 'product_view') AS product_viewers,
+          COUNT(DISTINCT session_id) FILTER (WHERE event_name = 'add_to_cart') AS cart_sessions,
+          COUNT(DISTINCT session_id) FILTER (WHERE event_name = 'begin_checkout') AS checkout_sessions,
+          COUNT(DISTINCT session_id) FILTER (WHERE event_name = 'payment_started') AS payment_sessions
+        FROM storefront_analytics_events
+        WHERE occurred_at >= NOW() - INTERVAL '30 days'
+      `),
+      pool.query(`
+        WITH analytics_start AS (
+          SELECT GREATEST(
+            NOW() - INTERVAL '30 days',
+            COALESCE(MIN(occurred_at), NOW())
+          ) AS started_at
+          FROM storefront_analytics_events
+        )
+        SELECT COUNT(DISTINCT regexp_replace(order_number, '-(LOCAL|IMPORT)$', '')) AS purchases
+        FROM orders, analytics_start
+        WHERE status IN ('paid', 'completed')
+          AND orders.created_at >= analytics_start.started_at
+      `),
     ]);
+
+    const funnelRow = funnelResult.rows[0] || {};
+    const funnel = [
+      { key: 'visitors', label: 'Store visits', value: Number(funnelRow.visitors || 0) },
+      { key: 'product_viewers', label: 'Viewed a product', value: Number(funnelRow.product_viewers || 0) },
+      { key: 'cart_sessions', label: 'Added to cart', value: Number(funnelRow.cart_sessions || 0) },
+      { key: 'checkout_sessions', label: 'Started checkout', value: Number(funnelRow.checkout_sessions || 0) },
+      { key: 'payment_sessions', label: 'Opened PayFast', value: Number(funnelRow.payment_sessions || 0) },
+      { key: 'purchases', label: 'Purchased', value: Number(purchasesResult.rows[0]?.purchases || 0), verified: true },
+    ].map((stage, index, stages) => {
+      const previous = index > 0 ? stages[index - 1].value : stage.value;
+      const retainedPercent = index === 0 ? 100 : (previous > 0 ? Math.min(100, Math.round((stage.value / previous) * 1000) / 10) : 0);
+      return {
+        ...stage,
+        retainedPercent,
+        lostPercent: index === 0 ? 0 : Math.max(0, Math.round((100 - retainedPercent) * 10) / 10),
+      };
+    });
 
     res.json({
       period: 'Last 30 days',
       summary: summaryResult.rows[0] || {},
       sources: sourcesResult.rows,
+      regions: regionsResult.rows,
       pages: pagesResult.rows,
       products: productsResult.rows,
       popularHours: hourlyResult.rows,
+      funnel,
       timeZone: 'Africa/Johannesburg',
     });
   } catch (error) {
