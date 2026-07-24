@@ -7,7 +7,7 @@ import { sendLearningCentreReportEmail } from '../services/learningCentreEmail.j
 
 export const router = express.Router();
 const parseJson = (value, fallback = []) => { try { return typeof value === 'string' ? JSON.parse(value) : (value ?? fallback); } catch { return fallback; } };
-const present = (row) => row ? { ...row, product_links: parseJson(row.product_links), internal_links: parseJson(row.internal_links), references: parseJson(row.references) } : null;
+const present = (row) => row ? { ...row, product_links: parseJson(row.product_links), internal_links: parseJson(row.internal_links), references: parseJson(row.references_json) } : null;
 
 router.get('/articles', async (_req, res) => {
   try {
@@ -55,7 +55,7 @@ router.post('/admin/topics/:id/generate', requireSuperuser, async (req, res) => 
     if (!topicResult.rowCount) return res.status(404).json({ error: 'Topic not found' });
     const topic = topicResult.rows[0]; const products = await getRelevantProducts(pool, topic); const generated = await generateLearningArticle({ topic, products });
     let slug = generated.slug || slugify(generated.title); const match = await pool.query('SELECT 1 FROM learning_centre_articles WHERE slug = $1', [slug]); if (match.rowCount) slug = `${slug}-${Date.now().toString().slice(-5)}`;
-    const result = await pool.query('INSERT INTO learning_centre_articles (topic_id,title,slug,excerpt,body_html,meta_title,meta_description,category,review_required,product_links,internal_links,references) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12) RETURNING *', [topic.id, generated.title, slug, generated.excerpt, generated.bodyHtml, generated.metaTitle, generated.metaDescription, topic.category, generated.reviewRequired, JSON.stringify(products), '[]', '[]']);
+    const result = await pool.query('INSERT INTO learning_centre_articles (topic_id,title,slug,excerpt,body_html,meta_title,meta_description,category,review_required,product_links,internal_links,references_json) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12) RETURNING *', [topic.id, generated.title, slug, generated.excerpt, generated.bodyHtml, generated.metaTitle, generated.metaDescription, topic.category, generated.reviewRequired, JSON.stringify(products), '[]', '[]']);
     await pool.query("UPDATE learning_centre_topics SET status = 'used', updated_at = CURRENT_TIMESTAMP WHERE id = $1", [topic.id]);
     const article = present(result.rows[0]); await sendLearningCentreReportEmail({ article, action: 'prepared as a draft', notes: article.review_required ? 'This topic needs human review before publishing.' : '' }).catch(() => {});
     res.status(201).json({ article, generatedWith: generated.generatedWith });
