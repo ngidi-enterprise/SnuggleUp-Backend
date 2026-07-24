@@ -411,6 +411,31 @@ async function initDb() {
     );
   `);
   await pool.query(`INSERT INTO learning_centre_settings (id) VALUES (1) ON CONFLICT (id) DO NOTHING;`);
+
+  // First-party storefront analytics. These rows intentionally contain no customer
+  // identity, contact, payment, address, or full URL/query-string information.
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS storefront_analytics_events (
+      id BIGSERIAL PRIMARY KEY,
+      event_name TEXT NOT NULL,
+      session_id TEXT NOT NULL,
+      visitor_id TEXT NOT NULL,
+      page_path TEXT,
+      page_title TEXT,
+      product_id TEXT,
+      product_name TEXT,
+      product_category TEXT,
+      source TEXT,
+      medium TEXT,
+      campaign TEXT,
+      referrer_host TEXT,
+      duration_seconds INTEGER,
+      occurred_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+    );
+  `);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_storefront_analytics_events_time ON storefront_analytics_events(occurred_at DESC);`);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_storefront_analytics_events_name_time ON storefront_analytics_events(event_name, occurred_at DESC);`);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_storefront_analytics_events_product ON storefront_analytics_events(product_id) WHERE product_id IS NOT NULL;`);
   
   console.log('✅ PostgreSQL database initialized successfully');
 }

@@ -19,6 +19,7 @@ import { router as discountsRouter } from './routes/discounts.js';
 import { router as seoRouter } from './routes/seo.js';
 import { router as supplierPickupRouter } from './routes/supplierPickup.js';
 import { router as learningCentreRouter } from './routes/learningCentre.js';
+import { router as storefrontAnalyticsRouter } from './routes/analytics.js';
 import { startLearningCentreScheduler } from './services/learningCentreScheduler.js';
 import { cjClient } from './services/cjClient.js';
 import { syncCuratedInventory } from './services/inventorySync.js';
@@ -100,6 +101,7 @@ app.use('/api/local-products', localProductsRouter); // Local warehouse inventor
 app.use('/api/bob', bobRouter); // Bob Go integration endpoints
 app.use('/api/supplier-pickup', supplierPickupRouter); // Tokenized supplier handoff confirmation
 app.use('/api/learning-centre', learningCentreRouter); // Learning Centre articles and superuser tools
+app.use('/api/analytics', storefrontAnalyticsRouter); // Privacy-safe first-party storefront insights
 
 // Health check (legacy)
 app.get('/health', (req, res) => {
