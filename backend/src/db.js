@@ -429,10 +429,16 @@ async function initDb() {
       medium TEXT,
       campaign TEXT,
       referrer_host TEXT,
+      country_code TEXT,
+      timezone_name TEXT,
+      browser_locale TEXT,
       duration_seconds INTEGER,
       occurred_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
     );
   `);
+  await pool.query(`ALTER TABLE storefront_analytics_events ADD COLUMN IF NOT EXISTS country_code TEXT;`);
+  await pool.query(`ALTER TABLE storefront_analytics_events ADD COLUMN IF NOT EXISTS timezone_name TEXT;`);
+  await pool.query(`ALTER TABLE storefront_analytics_events ADD COLUMN IF NOT EXISTS browser_locale TEXT;`);
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_storefront_analytics_events_time ON storefront_analytics_events(occurred_at DESC);`);
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_storefront_analytics_events_name_time ON storefront_analytics_events(event_name, occurred_at DESC);`);
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_storefront_analytics_events_product ON storefront_analytics_events(product_id) WHERE product_id IS NOT NULL;`);
