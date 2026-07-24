@@ -2,7 +2,7 @@ import express from 'express';
 import { pool } from '../db.js';
 import { requireSuperuser } from '../middleware/admin.js';
 import { DEFAULT_LEARNING_TOPICS, generateLearningArticle, getRelevantProducts, slugify } from '../services/learningCentreGenerator.js';
-import { runLearningCentreAutomation } from '../services/learningCentreScheduler.js';
+import { publishDueLearningArticles, runLearningCentreAutomation } from '../services/learningCentreScheduler.js';
 import { sendLearningCentreReportEmail } from '../services/learningCentreEmail.js';
 
 export const router = express.Router();
@@ -73,8 +73,29 @@ router.put('/admin/articles/:id', requireSuperuser, async (req, res) => {
 router.post('/admin/articles/:id/publish', requireSuperuser, async (req, res) => {
   try { const result = await pool.query("UPDATE learning_centre_articles SET status='published', published_at=CURRENT_TIMESTAMP, last_reviewed_at=CURRENT_TIMESTAMP, updated_at=CURRENT_TIMESTAMP WHERE id=$1 RETURNING *", [req.params.id]); if (!result.rowCount) return res.status(404).json({ error: 'Article not found' }); res.json({ article: present(result.rows[0]) }); } catch { res.status(500).json({ error: 'Unable to publish the article' }); }
 });
+router.post('/admin/articles/:id/schedule', requireSuperuser, async (req, res) => {
+  const { scheduledFor } = req.body || {};
+  const date = new Date(scheduledFor || '');
+  if (Number.isNaN(date.getTime()) || date <= new Date()) return res.status(400).json({ error: 'Choose a future date and time for this article.' });
+  try {
+    const result = await pool.query("UPDATE learning_centre_articles SET status='scheduled', scheduled_for=$1, updated_at=CURRENT_TIMESTAMP WHERE id=$2 RETURNING *", [date.toISOString(), req.params.id]);
+    if (!result.rowCount) return res.status(404).json({ error: 'Article not found' });
+    res.json({ article: present(result.rows[0]) });
+  } catch { res.status(500).json({ error: 'Unable to schedule this article' }); }
+});
 router.post('/admin/articles/:id/unpublish', requireSuperuser, async (req, res) => { try { const result = await pool.query("UPDATE learning_centre_articles SET status='draft', published_at=NULL, updated_at=CURRENT_TIMESTAMP WHERE id=$1 RETURNING *", [req.params.id]); if (!result.rowCount) return res.status(404).json({ error: 'Article not found' }); res.json({ article: present(result.rows[0]) }); } catch { res.status(500).json({ error: 'Unable to unpublish the article' }); } });
 router.post('/admin/settings', requireSuperuser, async (req, res) => { const { automationEnabled, intervalDays, lowRiskAutoPublish } = req.body || {}; try { const result = await pool.query('UPDATE learning_centre_settings SET automation_enabled=$1, interval_days=$2, low_risk_auto_publish=$3, updated_at=CURRENT_TIMESTAMP WHERE id=1 RETURNING *', [Boolean(automationEnabled), Math.min(30, Math.max(1, Number(intervalDays) || 5)), Boolean(lowRiskAutoPublish)]); res.json({ settings: result.rows[0] }); } catch { res.status(500).json({ error: 'Unable to save settings' }); } });
 router.post('/admin/automation/run', requireSuperuser, async (_req, res) => { try { res.json(await runLearningCentreAutomation({ force: true })); } catch (error) { res.status(500).json({ error: error.message || 'Unable to run automation' }); } });
+
+// A scheduler such as Render Cron Job can call this endpoint. Keep the secret only in Render.
+router.post('/automation/tick', async (req, res) => {
+  const configuredSecret = String(process.env.LEARNING_CENTRE_CRON_SECRET || '').trim();
+  if (!configuredSecret || req.get('x-learning-centre-secret') !== configuredSecret) return res.status(401).json({ error: 'Unauthorized' });
+  try {
+    const published = await publishDueLearningArticles();
+    const automation = await runLearningCentreAutomation();
+    res.json({ ok: true, published: published.length, automation });
+  } catch (error) { res.status(500).json({ error: error.message || 'Automation tick failed' }); }
+});
 
 export default router;
