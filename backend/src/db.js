@@ -393,7 +393,7 @@ async function initDb() {
       last_reviewed_at TIMESTAMP,
       product_links JSONB DEFAULT '[]',
       internal_links JSONB DEFAULT '[]',
-      references JSONB DEFAULT '[]',
+      references_json JSONB DEFAULT '[]',
       created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
       updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     );
