@@ -1,9 +1,10 @@
 import express from 'express';
 import pool from '../db.js';
+import { requireProductAssistantOrAdmin } from '../middleware/admin.js';
 
 export const router = express.Router();
 
-const ALLOWED_EVENTS = new Set(['session_start', 'page_view', 'page_exit', 'category_view', 'product_view', 'product_click', 'add_to_cart', 'begin_checkout', 'payment_started', 'search']);
+const ALLOWED_EVENTS = new Set(['session_start', 'page_view', 'page_exit', 'category_view', 'product_view', 'product_click', 'add_to_cart', 'begin_checkout', 'payment_started', 'scroll_depth', 'search']);
 const cleanText = (value, maxLength = 160) => String(value || '').trim().slice(0, maxLength);
 const cleanPath = (value) => {
   const path = cleanText(value, 240);
@@ -19,6 +20,33 @@ const requestCountryCode = (req) => {
   return /^[A-Z]{2}$/.test(value) && !['XX', 'T1'].includes(value) ? value : null;
 };
 
+router.post('/session-role', requireProductAssistantOrAdmin, async (req, res) => {
+  try {
+    const sessionId = cleanText(req.body?.sessionId, 96);
+    const visitorId = cleanText(req.body?.visitorId, 96);
+    if (!sessionId || !visitorId) return res.status(400).json({ error: 'Analytics session is required' });
+
+    const audienceType = req.access?.isSuperuser ? 'superuser' : 'staff';
+    await pool.query(
+      `INSERT INTO storefront_analytics_audiences (visitor_id, audience_type, updated_at)
+       VALUES ($1, $2, CURRENT_TIMESTAMP)
+       ON CONFLICT (visitor_id) DO UPDATE
+       SET audience_type = EXCLUDED.audience_type, updated_at = CURRENT_TIMESTAMP`,
+      [visitorId, audienceType]
+    );
+    const result = await pool.query(
+      `UPDATE storefront_analytics_events
+       SET audience_type = $1
+       WHERE visitor_id = $2 OR session_id = $3`,
+      [audienceType, visitorId, sessionId]
+    );
+    return res.json({ ok: true, audienceType, updated: result.rowCount });
+  } catch (error) {
+    console.error('[storefront-analytics] session classification failed:', error.message);
+    return res.status(500).json({ error: 'Unable to classify analytics session' });
+  }
+});
+
 // This endpoint is deliberately anonymous. It accepts only the small allowlist
 // below and never records customer accounts, contact details, IP addresses, or URLs with query strings.
 router.post('/events', async (req, res) => {
@@ -33,10 +61,14 @@ router.post('/events', async (req, res) => {
     }
 
     const duration = Number.parseInt(body.durationSeconds, 10);
+    const eventValue = Number.parseInt(body.eventValue, 10);
     await pool.query(
       `INSERT INTO storefront_analytics_events
-       (event_name, session_id, visitor_id, page_path, page_title, product_id, product_name, product_category, source, medium, campaign, referrer_host, country_code, timezone_name, browser_locale, duration_seconds)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)`,
+       (event_name, session_id, visitor_id, page_path, page_title, product_id, product_name, product_category, source, medium, campaign, referrer_host, country_code, timezone_name, browser_locale, event_value, duration_seconds, audience_type)
+       VALUES (
+         $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,
+         COALESCE((SELECT audience_type FROM storefront_analytics_audiences WHERE visitor_id = $3), 'customer')
+       )`,
       [
         eventName,
         sessionId,
@@ -53,6 +85,7 @@ router.post('/events', async (req, res) => {
         requestCountryCode(req),
         cleanText(body.timezoneName, 80) || null,
         cleanText(body.browserLocale, 32) || null,
+        Number.isFinite(eventValue) ? Math.max(0, Math.min(eventValue, 100)) : null,
         Number.isFinite(duration) && duration >= 0 ? Math.min(duration, 86400) : null,
       ]
     );

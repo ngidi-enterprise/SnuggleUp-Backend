@@ -1144,7 +1144,7 @@ router.put('/orders/:id', async (req, res) => {
 // customer identity and financial data; orders remain in the existing analytics endpoint.
 router.get('/traffic-insights', async (_req, res) => {
   try {
-    const [summaryResult, sourcesResult, regionsResult, pagesResult, productsResult, hourlyResult, funnelResult, purchasesResult] = await Promise.all([
+    const [summaryResult, sourcesResult, regionsResult, pagesResult, productsResult, hourlyResult, funnelResult, purchasesResult, staffResult, journeysResult] = await Promise.all([
       pool.query(`
         SELECT
           COUNT(DISTINCT visitor_id) AS visitors,
@@ -1153,7 +1153,8 @@ router.get('/traffic-insights', async (_req, res) => {
           COUNT(*) FILTER (WHERE event_name = 'product_view') AS product_views,
           COALESCE(ROUND(AVG(duration_seconds) FILTER (WHERE event_name = 'page_exit' AND duration_seconds IS NOT NULL)), 0) AS average_seconds
         FROM storefront_analytics_events
-        WHERE occurred_at >= NOW() - INTERVAL '30 days'
+        WHERE audience_type = 'customer'
+          AND occurred_at >= NOW() - INTERVAL '30 days'
       `),
       pool.query(`
         SELECT
@@ -1161,7 +1162,8 @@ router.get('/traffic-insights', async (_req, res) => {
           COALESCE(NULLIF(medium, ''), 'organic / referral') AS medium,
           COUNT(DISTINCT session_id) AS sessions
         FROM storefront_analytics_events
-        WHERE event_name = 'session_start' AND occurred_at >= NOW() - INTERVAL '30 days'
+        WHERE audience_type = 'customer'
+          AND event_name = 'session_start' AND occurred_at >= NOW() - INTERVAL '30 days'
         GROUP BY 1, 2
         ORDER BY sessions DESC
         LIMIT 8
@@ -1171,9 +1173,11 @@ router.get('/traffic-insights', async (_req, res) => {
           country_code,
           timezone_name,
           MAX(browser_locale) AS browser_locale,
-          COUNT(DISTINCT session_id) AS sessions
+          COUNT(DISTINCT session_id) AS sessions,
+          MAX(occurred_at) AS latest_visit
         FROM storefront_analytics_events
-        WHERE event_name = 'session_start'
+        WHERE audience_type = 'customer'
+          AND event_name = 'session_start'
           AND occurred_at >= NOW() - INTERVAL '30 days'
           AND (country_code IS NOT NULL OR timezone_name IS NOT NULL)
         GROUP BY country_code, timezone_name
@@ -1183,7 +1187,8 @@ router.get('/traffic-insights', async (_req, res) => {
       pool.query(`
         SELECT page_path, MAX(page_title) AS page_title, COUNT(*) AS views
         FROM storefront_analytics_events
-        WHERE event_name = 'page_view' AND occurred_at >= NOW() - INTERVAL '30 days'
+        WHERE audience_type = 'customer'
+          AND event_name = 'page_view' AND occurred_at >= NOW() - INTERVAL '30 days'
         GROUP BY page_path
         ORDER BY views DESC
         LIMIT 10
@@ -1194,7 +1199,8 @@ router.get('/traffic-insights', async (_req, res) => {
                COUNT(*) FILTER (WHERE event_name = 'product_click') AS clicks,
                COUNT(*) FILTER (WHERE event_name = 'add_to_cart') AS add_to_cart
         FROM storefront_analytics_events
-        WHERE product_id IS NOT NULL AND occurred_at >= NOW() - INTERVAL '30 days'
+        WHERE audience_type = 'customer'
+          AND product_id IS NOT NULL AND occurred_at >= NOW() - INTERVAL '30 days'
         GROUP BY product_id
         ORDER BY views DESC, clicks DESC
         LIMIT 10
@@ -1202,7 +1208,8 @@ router.get('/traffic-insights', async (_req, res) => {
       pool.query(`
         SELECT EXTRACT(HOUR FROM (occurred_at AT TIME ZONE 'UTC' AT TIME ZONE 'Africa/Johannesburg'))::int AS hour, COUNT(DISTINCT session_id) AS sessions
         FROM storefront_analytics_events
-        WHERE occurred_at >= NOW() - INTERVAL '30 days'
+        WHERE audience_type = 'customer'
+          AND occurred_at >= NOW() - INTERVAL '30 days'
         GROUP BY 1
         ORDER BY sessions DESC, hour ASC
         LIMIT 6
@@ -1215,7 +1222,8 @@ router.get('/traffic-insights', async (_req, res) => {
           COUNT(DISTINCT session_id) FILTER (WHERE event_name = 'begin_checkout') AS checkout_sessions,
           COUNT(DISTINCT session_id) FILTER (WHERE event_name = 'payment_started') AS payment_sessions
         FROM storefront_analytics_events
-        WHERE occurred_at >= NOW() - INTERVAL '30 days'
+        WHERE audience_type = 'customer'
+          AND occurred_at >= NOW() - INTERVAL '30 days'
       `),
       pool.query(`
         WITH analytics_start AS (
@@ -1229,6 +1237,61 @@ router.get('/traffic-insights', async (_req, res) => {
         FROM orders, analytics_start
         WHERE status IN ('paid', 'completed')
           AND orders.created_at >= analytics_start.started_at
+          AND LOWER(COALESCE(orders.customer_email, '')) <> 'support@snuggleup.co.za'
+          AND LOWER(COALESCE(orders.customer_email, '')) NOT IN (
+            SELECT LOWER(email)
+            FROM users
+            WHERE role IN ('superuser', 'product_assistant') OR is_admin = TRUE
+          )
+      `),
+      pool.query(`
+        SELECT
+          audience_type,
+          COUNT(DISTINCT session_id) AS sessions,
+          COUNT(*) FILTER (WHERE event_name = 'page_view') AS page_views,
+          MAX(occurred_at) AS latest_activity
+        FROM storefront_analytics_events
+        WHERE audience_type IN ('superuser', 'staff')
+          AND occurred_at >= NOW() - INTERVAL '30 days'
+        GROUP BY audience_type
+        ORDER BY audience_type
+      `),
+      pool.query(`
+        SELECT
+          session_id,
+          MIN(occurred_at) AS started_at,
+          MAX(occurred_at) AS latest_activity,
+          MAX(NULLIF(source, '')) AS source,
+          MAX(NULLIF(referrer_host, '')) AS referrer_host,
+          MAX(country_code) AS country_code,
+          MAX(timezone_name) AS timezone_name,
+          JSON_AGG(
+            JSON_BUILD_OBJECT(
+              'eventName', event_name,
+              'pagePath', page_path,
+              'pageTitle', page_title,
+              'productName', product_name,
+              'eventValue', event_value,
+              'occurredAt', occurred_at
+            ) ORDER BY occurred_at
+          ) FILTER (
+            WHERE event_name IN (
+              'page_view', 'category_view', 'product_view', 'add_to_cart',
+              'begin_checkout', 'payment_started', 'scroll_depth'
+            )
+          ) AS steps
+        FROM storefront_analytics_events
+        WHERE audience_type = 'customer'
+          AND occurred_at >= NOW() - INTERVAL '7 days'
+        GROUP BY session_id
+        HAVING COUNT(*) FILTER (
+          WHERE event_name IN (
+            'page_view', 'category_view', 'product_view', 'add_to_cart',
+            'begin_checkout', 'payment_started', 'scroll_depth'
+          )
+        ) > 0
+        ORDER BY MAX(occurred_at) DESC
+        LIMIT 20
       `),
     ]);
 
@@ -1259,6 +1322,8 @@ router.get('/traffic-insights', async (_req, res) => {
       products: productsResult.rows,
       popularHours: hourlyResult.rows,
       funnel,
+      staffActivity: staffResult.rows,
+      journeys: journeysResult.rows,
       timeZone: 'Africa/Johannesburg',
     });
   } catch (error) {
