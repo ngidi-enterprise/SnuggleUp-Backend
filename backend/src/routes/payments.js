@@ -73,6 +73,30 @@ const getPayFastConfig = (req) => {
   };
 };
 
+const roundMoney = (value) => Math.round((Number(value || 0) + Number.EPSILON) * 100) / 100;
+
+const hasCompletedPurchase = async ({ email, userId }) => {
+  const normalizedEmail = String(email || '').trim().toLowerCase();
+  const normalizedUserId = userId && userId !== 'guest' ? String(userId) : '';
+
+  if (!normalizedEmail && !normalizedUserId) return false;
+
+  const { default: pool } = await import('../db.js');
+  const { rowCount } = await pool.query(
+    `SELECT 1
+       FROM orders
+      WHERE LOWER(COALESCE(status, '')) IN ('paid', 'completed', 'complete', 'delivered')
+        AND (
+          ($1 <> '' AND LOWER(COALESCE(customer_email, '')) = $1)
+          OR ($2 <> '' AND user_id = $2)
+        )
+      LIMIT 1`,
+    [normalizedEmail, normalizedUserId]
+  );
+
+  return rowCount > 0;
+};
+
 router.get('/health', (req, res) => {
   const config = getPayFastConfig(req);
   const gatewayUrl = config.testMode
@@ -99,6 +123,32 @@ router.get('/health', (req, res) => {
       (config.testMode || !config.usingKnownSandboxCredentials)
     )
   });
+});
+
+router.get('/first-order-eligibility', optionalAuth, async (req, res) => {
+  try {
+    if (!req.user) {
+      return res.json({
+        eligible: true,
+        discountPercent: 10,
+        identityVerified: false
+      });
+    }
+
+    const hasPurchased = await hasCompletedPurchase({
+      email: req.user.email,
+      userId: req.user.userId
+    });
+
+    return res.json({
+      eligible: !hasPurchased,
+      discountPercent: 10,
+      identityVerified: true
+    });
+  } catch (error) {
+    console.error('[first-order-discount] eligibility check failed:', error);
+    return res.status(500).json({ error: 'Unable to check first-order discount eligibility' });
+  }
 });
 
 // Create a payment
@@ -264,11 +314,10 @@ router.post('/create', optionalAuth, async (req, res) => {
       customerName: (shippingDetails && shippingDetails.customerName) || req.user?.name || undefined,
     };
 
-    const totalSubtotal = (subtotal || 0);
     // derive subtotals if not provided
-    const localSubtotal = localOrderItems.reduce((sum,i) => sum + (i.price*i.quantity),0);
-    const importSubtotal = importOrderItems.reduce((sum,i) => sum + (i.price*i.quantity),0);
-    const calculatedOrderSubtotal = localSubtotal + importSubtotal;
+    const localSubtotal = roundMoney(localOrderItems.reduce((sum, i) => sum + (Number(i.price || 0) * Number(i.quantity || 0)), 0));
+    const importSubtotal = roundMoney(importOrderItems.reduce((sum, i) => sum + (Number(i.price || 0) * Number(i.quantity || 0)), 0));
+    const calculatedOrderSubtotal = roundMoney(localSubtotal + importSubtotal);
     const normalizedLocalDeliveryMode = String(localDeliveryMode || '').trim().toLowerCase();
     const localMethodText = String(localShippingMethod || '').toLowerCase();
     const freeLocalDelivery = calculatedOrderSubtotal > 600 && (
@@ -278,26 +327,69 @@ router.post('/create', optionalAuth, async (req, res) => {
       localMethodText.includes('pick-up')
     );
 
-    // allocate discount proportionally
+    const checkoutEmail = String(req.user?.email || email || '').trim().toLowerCase();
+    const previousPurchase = await hasCompletedPurchase({
+      email: checkoutEmail,
+      userId: req.user?.userId
+    });
+
     const validatedBundle = calculateBundleDiscount(bundleSelections, localOrderItems);
-    const disc = (Number(discount) || 0) + validatedBundle.discount;
-    const discountLocal = totalSubtotal ? Math.round((localSubtotal/totalSubtotal) * disc) : 0;
-    const discountImport = disc - discountLocal;
+    const bundleDiscount = Math.min(roundMoney(validatedBundle.discount), localSubtotal);
+    const firstOrderDiscount = previousPurchase
+      ? 0
+      : roundMoney(Math.max(calculatedOrderSubtotal - bundleDiscount, 0) * 0.1);
+    const voucherDiscount = Math.max(roundMoney(discount), 0);
+    const sharedDiscount = Math.min(
+      roundMoney(firstOrderDiscount + voucherDiscount),
+      Math.max(calculatedOrderSubtotal - bundleDiscount, 0)
+    );
+    const discountableLocalSubtotal = Math.max(localSubtotal - bundleDiscount, 0);
+    const discountableSubtotal = roundMoney(discountableLocalSubtotal + importSubtotal);
+    const sharedLocalDiscount = discountableSubtotal
+      ? roundMoney(sharedDiscount * (discountableLocalSubtotal / discountableSubtotal))
+      : 0;
+    const discountLocal = Math.min(roundMoney(bundleDiscount + sharedLocalDiscount), localSubtotal);
+    const discountImport = Math.min(
+      roundMoney(sharedDiscount - sharedLocalDiscount),
+      importSubtotal
+    );
+    const totalDiscount = roundMoney(discountLocal + discountImport);
+    const localShippingAmount = freeLocalDelivery ? 0 : Math.max(roundMoney(localShipping), 0);
+    const importShippingAmount = Math.max(roundMoney(shipping), 0);
+    const insuranceAmount = Math.max(roundMoney(insurance?.cost), 0);
+    const serverTotal = Math.max(
+      roundMoney(
+        calculatedOrderSubtotal
+        + localShippingAmount
+        + importShippingAmount
+        + insuranceAmount
+        - totalDiscount
+      ),
+      0
+    );
+
+    console.log('[first-order-discount]', {
+      email: checkoutEmail,
+      eligible: !previousPurchase,
+      firstOrderDiscount,
+      bundleDiscount,
+      voucherDiscount,
+      serverTotal
+    });
 
     try {
       // create local order if items exist
       if (localOrderItems.length > 0) {
         // use explicit suffix so order numbers are self‑explaining
         const localOrderNumber = `${orderNumber}-LOCAL`;
-        const localShippingAmount = freeLocalDelivery ? 0 : Math.max(Number(localShipping) || 0, 0);
         await createOrder(userId, {
           orderNumber: localOrderNumber,
           items: localOrderItems,
           subtotal: localSubtotal,
           shipping: localShippingAmount,
           discount: discountLocal,
-          total: localSubtotal + localShippingAmount - discountLocal,
-          email,
+          total: roundMoney(localSubtotal + localShippingAmount - discountLocal),
+          email: checkoutEmail,
           shippingCountry,
           shippingMethod: localShippingMethod || 'Standard delivery - R99',
           insurance: { selected: false, cost: 0, coverage: 0 },
@@ -312,10 +404,10 @@ router.post('/create', optionalAuth, async (req, res) => {
           orderNumber: importOrderNumber,
           items: importOrderItems,
           subtotal: importSubtotal,
-          shipping: shipping || 0,
+          shipping: importShippingAmount,
           discount: discountImport,
-          total: importSubtotal + (shipping||0) + (insurance?.cost||0) - discountImport,
-          email,
+          total: roundMoney(importSubtotal + importShippingAmount + insuranceAmount - discountImport),
+          email: checkoutEmail,
           shippingCountry,
           shippingMethod,
           insurance,
@@ -337,9 +429,9 @@ router.post('/create', optionalAuth, async (req, res) => {
       cancel_url: `${backendUrl}/api/payments/cancel`,
       notify_url: `${backendUrl}/api/payments/notify`,
       name_first: (req.user?.name || req.user?.email?.split('@')[0] || 'Customer').toString().slice(0, 60),
-      email_address: email,
+      email_address: checkoutEmail,
       m_payment_id: orderNumber,
-      amount: parseFloat(amount).toFixed(2),
+      amount: serverTotal.toFixed(2),
       item_name: `Order ${orderItems?.length || 0} items`,
     };
 
