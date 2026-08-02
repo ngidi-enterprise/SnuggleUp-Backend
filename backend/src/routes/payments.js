@@ -5,6 +5,7 @@ import { authenticateToken } from '../middleware/auth.js';
 import { createOrder, updateOrderStatus, getOrderByNumber } from './orders.js';
 import { sendBrandedOrderConfirmationEmail } from '../services/orderConfirmationEmail.js';
 import { notifyOwnerOfNewOrder } from '../services/ownerOrderNotifications.js';
+import { calculateBundleDiscount } from '../config/localBundles.js';
 
 export const router = express.Router();
 
@@ -117,7 +118,8 @@ router.post('/create', optionalAuth, async (req, res) => {
       shippingQuoted,
       shippingCountry,
       insurance,
-      shippingDetails
+      shippingDetails,
+      bundleSelections
     } = req.body;
     
     console.log('💰 Creating PayFast payment:', { 
@@ -277,7 +279,8 @@ router.post('/create', optionalAuth, async (req, res) => {
     );
 
     // allocate discount proportionally
-    const disc = discount || 0;
+    const validatedBundle = calculateBundleDiscount(bundleSelections, localOrderItems);
+    const disc = (Number(discount) || 0) + validatedBundle.discount;
     const discountLocal = totalSubtotal ? Math.round((localSubtotal/totalSubtotal) * disc) : 0;
     const discountImport = disc - discountLocal;
 

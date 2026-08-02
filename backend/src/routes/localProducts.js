@@ -7,6 +7,7 @@ import {
 } from '../middleware/admin.js';
 import { generateProductDescription, getAvailableProviders } from '../services/descriptionGenerator.js';
 import { sendProductUploadReviewEmail } from '../services/productApprovalEmail.js';
+import { LOCAL_BUNDLES } from '../config/localBundles.js';
 
 export const router = express.Router();
 
@@ -267,6 +268,46 @@ router.get('/', async (req, res) => {
   } catch (error) {
     console.error('Error fetching local products:', error);
     res.status(500).json({ error: 'Failed to fetch products' });
+  }
+});
+
+router.get('/bundles/available', async (req, res) => {
+  try {
+    const productIds = [...new Set(LOCAL_BUNDLES.flatMap(bundle => bundle.productIds))];
+    const result = await pool.query(
+      `SELECT ${productSelect}
+       FROM local_products
+       WHERE id = ANY($1::int[])
+         AND is_active = TRUE
+         AND approval_status = 'approved'`,
+      [productIds]
+    );
+    const productsById = new Map(result.rows.map(product => [Number(product.id), product]));
+
+    const bundles = LOCAL_BUNDLES.map(bundle => {
+      const products = bundle.productIds
+        .map(productId => productsById.get(productId))
+        .filter(Boolean);
+      const isComplete = products.length === bundle.productIds.length;
+      const regularPrice = products.reduce((sum, product) => sum + Number(product.price || 0), 0);
+      const availableQuantity = isComplete
+        ? Math.min(...products.map(product => Math.max(0, Number(product.stock_quantity || 0))))
+        : 0;
+
+      return {
+        ...bundle,
+        products,
+        regularPrice: Math.round(regularPrice * 100) / 100,
+        bundlePrice: Math.round(Math.max(regularPrice - bundle.saving, 0) * 100) / 100,
+        availableQuantity,
+        isAvailable: isComplete && availableQuantity > 0,
+      };
+    });
+
+    res.json({ bundles });
+  } catch (error) {
+    console.error('Error fetching local product bundles:', error);
+    res.status(500).json({ error: 'Failed to fetch product bundles' });
   }
 });
 
