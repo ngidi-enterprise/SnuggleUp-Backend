@@ -9,16 +9,24 @@
 
 2. Environment Variables (add to .env):
 ```
-PAYFAST_MERCHANT_ID=your_merchant_id
-PAYFAST_MERCHANT_KEY=your_merchant_key
-PAYFAST_PASSPHRASE=your_passphrase  # if using secure passphrase
-PAYFAST_TEST_MODE=true  # set to false for production
+FRONTEND_URL=https://snuggleup.co.za
+BACKEND_URL=https://api.snuggleup.co.za
+PAYFAST_MERCHANT_ID=your_live_merchant_id
+PAYFAST_MERCHANT_KEY=your_live_merchant_key
+PAYFAST_PASSPHRASE=your_live_passphrase
+PAYFAST_NO_PASSPHRASE=false
+PAYFAST_TEST_MODE=false
+PAYFAST_DEBUG_LOGS=false
 ```
 
-3. Webhook URLs to configure in PayFast dashboard:
-   - Return URL: https://your-frontend.com/checkout/success
-   - Cancel URL: https://your-frontend.com/checkout/cancel
-   - Notify URL: https://your-backend.com/api/payments/notify
+3. PayFast callback URLs are sent with each checkout request:
+   - Return URL: https://api.snuggleup.co.za/api/payments/success
+   - Cancel URL: https://api.snuggleup.co.za/api/payments/cancel
+   - Notify URL: https://api.snuggleup.co.za/api/payments/notify
+
+4. Confirm live mode after deployment:
+   - Open `https://api.snuggleup.co.za/api/payments/health`
+   - It should show `"mode":"live"`, `"ready":true`, and `"usingKnownSandboxCredentials":false`
 
 ## Integration Flow
 
@@ -56,7 +64,7 @@ app.post('/api/payments/notify', async (req, res) => {
 
 ## Testing
 
-Use these test card details in test mode:
+Use these test card details only in sandbox/test mode:
 - Card Number: 5200000000000015
 - CVV: 123
 - Expiry: Any future date

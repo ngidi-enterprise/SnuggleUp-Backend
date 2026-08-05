@@ -63,7 +63,7 @@ export const sendProductUploadReviewEmail = async ({ product, submittedBy }) => 
   const logoUrl = getLogoUrl();
   const reviewUrl = adminUrl();
   const productName = product?.name || 'New product';
-  const submittedByEmail = submittedBy || product?.submitted_by_email || 'Product assistant';
+  const submittedByEmail = submittedBy || product?.submitted_by_email || 'Team Assistant';
 
   const html = `
 <!DOCTYPE html>

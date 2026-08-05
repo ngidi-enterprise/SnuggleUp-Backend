@@ -35,7 +35,12 @@ export const authenticateToken = async (req, res, next) => {
     // Attempt to extract human-friendly name from Supabase JWT claims
     const meta = payload.user_metadata || payload.userMeta || {};
     const nameClaim = meta.full_name || meta.name || payload.name || payload.nickname || null;
-    req.user = { userId: payload.sub, email: payload.email, name: nameClaim, supabaseUser: true };
+    req.user = {
+      userId: payload.sub,
+      email: payload.email,
+      name: nameClaim,
+      supabaseUser: true,
+    };
     console.log('✅ Token verified via JWKS (RS256)');
     return next();
   } catch (err) {
@@ -49,7 +54,12 @@ export const authenticateToken = async (req, res, next) => {
       const decoded = jwt.verify(token, SUPABASE_JWT_SECRET, { algorithms: ['HS256'] });
       const meta = decoded.user_metadata || decoded.userMeta || {};
       const nameClaim = meta.full_name || meta.name || decoded.name || decoded.nickname || null;
-      req.user = { userId: decoded.sub, email: decoded.email, name: nameClaim, supabaseUser: true };
+      req.user = {
+        userId: decoded.sub,
+        email: decoded.email,
+        name: nameClaim,
+        supabaseUser: true,
+      };
       console.log('✅ Token verified via HS256 (Supabase JWT Secret)');
       return next();
     } catch (err) {
@@ -91,7 +101,12 @@ export const optionalAuth = async (req, res, next) => {
     });
     const meta = payload.user_metadata || payload.userMeta || {};
     const nameClaim = meta.full_name || meta.name || payload.name || payload.nickname || null;
-    req.user = { userId: payload.sub, email: payload.email, name: nameClaim, supabaseUser: true };
+    req.user = {
+      userId: payload.sub,
+      email: payload.email,
+      name: nameClaim,
+      supabaseUser: true,
+    };
     return next();
   } catch (_) {
     // continue to HS256/app JWT paths
@@ -102,7 +117,12 @@ export const optionalAuth = async (req, res, next) => {
       const decoded = jwt.verify(token, SUPABASE_JWT_SECRET, { algorithms: ['HS256'] });
       const meta = decoded.user_metadata || decoded.userMeta || {};
       const nameClaim = meta.full_name || meta.name || decoded.name || decoded.nickname || null;
-      req.user = { userId: decoded.sub, email: decoded.email, name: nameClaim, supabaseUser: true };
+      req.user = {
+        userId: decoded.sub,
+        email: decoded.email,
+        name: nameClaim,
+        supabaseUser: true,
+      };
       return next();
     } catch (_) {
       // continue to app JWT path

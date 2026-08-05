@@ -8,11 +8,16 @@ import { notifyTrackingUpdateIfNeeded } from '../services/trackingNotifications.
 export const router = express.Router();
 
 const ECONOMY_FLAT_RATE_ZAR = 99;
+const DEFAULT_BOB_API_BASE_URL = 'https://api.bobgo.co.za/v2/';
 
 const getBobBaseUrl = () => {
-  const base = process.env.BOB_API_BASE_URL || 'https://api.sandbox.bobgo.co.za/v2/';
+  const base = process.env.BOB_API_BASE_URL || DEFAULT_BOB_API_BASE_URL;
   return base.endsWith('/') ? base : `${base}/`;
 };
+
+const getBobEnvironment = () => (
+  getBobBaseUrl().includes('sandbox') ? 'sandbox' : 'production'
+);
 
 const getBobAuthToken = () => process.env.BOB_API_TOKEN || '';
 const bobMutationsEnabled = () => process.env.BOB_ENABLE_MUTATIONS === 'true';
@@ -723,6 +728,7 @@ router.get('/health', (_req, res) => {
     ok: true,
     service: 'bob-api',
     baseUrl: getBobBaseUrl(),
+    environment: getBobEnvironment(),
     tokenConfigured: Boolean(getBobAuthToken()),
     mutationsEnabled: bobMutationsEnabled(),
     webhookSecretConfigured: Boolean(getBobWebhookSecret()),
