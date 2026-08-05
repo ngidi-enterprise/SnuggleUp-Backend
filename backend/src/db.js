@@ -433,6 +433,21 @@ async function initDb() {
       timezone_name TEXT,
       browser_locale TEXT,
       audience_type TEXT NOT NULL DEFAULT 'customer',
+      traffic_type TEXT NOT NULL DEFAULT 'customer',
+      is_internal_traffic BOOLEAN NOT NULL DEFAULT FALSE,
+      user_role TEXT,
+      device_id TEXT,
+      page_url TEXT,
+      referrer TEXT,
+      utm_source TEXT,
+      utm_medium TEXT,
+      utm_campaign TEXT,
+      utm_term TEXT,
+      utm_content TEXT,
+      gclid TEXT,
+      campaign_source TEXT,
+      campaign_medium TEXT,
+      campaign_name TEXT,
       event_value INTEGER,
       duration_seconds INTEGER,
       occurred_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
@@ -442,6 +457,21 @@ async function initDb() {
   await pool.query(`ALTER TABLE storefront_analytics_events ADD COLUMN IF NOT EXISTS timezone_name TEXT;`);
   await pool.query(`ALTER TABLE storefront_analytics_events ADD COLUMN IF NOT EXISTS browser_locale TEXT;`);
   await pool.query(`ALTER TABLE storefront_analytics_events ADD COLUMN IF NOT EXISTS audience_type TEXT NOT NULL DEFAULT 'customer';`);
+  await pool.query(`ALTER TABLE storefront_analytics_events ADD COLUMN IF NOT EXISTS traffic_type TEXT NOT NULL DEFAULT 'customer';`);
+  await pool.query(`ALTER TABLE storefront_analytics_events ADD COLUMN IF NOT EXISTS is_internal_traffic BOOLEAN NOT NULL DEFAULT FALSE;`);
+  await pool.query(`ALTER TABLE storefront_analytics_events ADD COLUMN IF NOT EXISTS user_role TEXT;`);
+  await pool.query(`ALTER TABLE storefront_analytics_events ADD COLUMN IF NOT EXISTS device_id TEXT;`);
+  await pool.query(`ALTER TABLE storefront_analytics_events ADD COLUMN IF NOT EXISTS page_url TEXT;`);
+  await pool.query(`ALTER TABLE storefront_analytics_events ADD COLUMN IF NOT EXISTS referrer TEXT;`);
+  await pool.query(`ALTER TABLE storefront_analytics_events ADD COLUMN IF NOT EXISTS utm_source TEXT;`);
+  await pool.query(`ALTER TABLE storefront_analytics_events ADD COLUMN IF NOT EXISTS utm_medium TEXT;`);
+  await pool.query(`ALTER TABLE storefront_analytics_events ADD COLUMN IF NOT EXISTS utm_campaign TEXT;`);
+  await pool.query(`ALTER TABLE storefront_analytics_events ADD COLUMN IF NOT EXISTS utm_term TEXT;`);
+  await pool.query(`ALTER TABLE storefront_analytics_events ADD COLUMN IF NOT EXISTS utm_content TEXT;`);
+  await pool.query(`ALTER TABLE storefront_analytics_events ADD COLUMN IF NOT EXISTS gclid TEXT;`);
+  await pool.query(`ALTER TABLE storefront_analytics_events ADD COLUMN IF NOT EXISTS campaign_source TEXT;`);
+  await pool.query(`ALTER TABLE storefront_analytics_events ADD COLUMN IF NOT EXISTS campaign_medium TEXT;`);
+  await pool.query(`ALTER TABLE storefront_analytics_events ADD COLUMN IF NOT EXISTS campaign_name TEXT;`);
   await pool.query(`ALTER TABLE storefront_analytics_events ADD COLUMN IF NOT EXISTS event_value INTEGER;`);
   await pool.query(`
     CREATE TABLE IF NOT EXISTS storefront_analytics_audiences (
@@ -453,6 +483,39 @@ async function initDb() {
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_storefront_analytics_events_time ON storefront_analytics_events(occurred_at DESC);`);
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_storefront_analytics_events_name_time ON storefront_analytics_events(event_name, occurred_at DESC);`);
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_storefront_analytics_events_product ON storefront_analytics_events(product_id) WHERE product_id IS NOT NULL;`);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_storefront_analytics_events_traffic_time ON storefront_analytics_events(traffic_type, is_internal_traffic, occurred_at DESC);`);
+  await pool.query(`
+    UPDATE storefront_analytics_events
+    SET
+      traffic_type = 'superuser',
+      is_internal_traffic = TRUE,
+      user_role = CASE
+        WHEN audience_type = 'staff' THEN 'product_assistant'
+        ELSE 'superuser'
+      END
+    WHERE audience_type IN ('superuser', 'staff')
+      AND traffic_type = 'customer'
+  `);
+  await pool.query(`
+    UPDATE storefront_analytics_events
+    SET
+      page_url = COALESCE(page_url, page_path),
+      referrer = COALESCE(referrer, referrer_host),
+      utm_source = COALESCE(utm_source, source),
+      utm_medium = COALESCE(utm_medium, medium),
+      utm_campaign = COALESCE(utm_campaign, campaign),
+      campaign_source = COALESCE(campaign_source, source),
+      campaign_medium = COALESCE(campaign_medium, medium),
+      campaign_name = COALESCE(campaign_name, campaign)
+    WHERE (page_url IS NULL AND page_path IS NOT NULL)
+       OR (referrer IS NULL AND referrer_host IS NOT NULL)
+       OR (utm_source IS NULL AND source IS NOT NULL)
+       OR (utm_medium IS NULL AND medium IS NOT NULL)
+       OR (utm_campaign IS NULL AND campaign IS NOT NULL)
+       OR (campaign_source IS NULL AND source IS NOT NULL)
+       OR (campaign_medium IS NULL AND medium IS NOT NULL)
+       OR (campaign_name IS NULL AND campaign IS NOT NULL)
+  `);
   
   console.log('✅ PostgreSQL database initialized successfully');
 }
