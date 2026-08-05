@@ -6,7 +6,8 @@
   "type": "module",
   "scripts": {
     "start": "node src/server.js",
-    "dev": "nodemon src/server.js"
+    "dev": "nodemon src/server.js",
+    "test": "node --test test/analyticsTrafficClassifier.test.js"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.32.0",
