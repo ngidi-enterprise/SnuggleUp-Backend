@@ -3,6 +3,7 @@ import pool from '../db.js';
 import { optionalAuth } from '../middleware/auth.js';
 import { getUserAccess, requireProductAssistantOrAdmin } from '../middleware/admin.js';
 import { classifyAnalyticsTraffic } from '../services/analyticsTrafficClassifier.js';
+import { createAnalyticsEventDedupeKey } from '../services/analyticsEventDeduplication.js';
 
 export const router = express.Router();
 
@@ -11,7 +12,7 @@ const ALLOWED_EVENTS = new Set([
   'product_click', 'add_to_cart', 'remove_from_cart', 'begin_checkout',
   'checkout_step', 'payment_started', 'payment_attempt', 'purchase',
   'form_submission', 'button_click', 'outbound_click', 'error',
-  'scroll_depth', 'search',
+  'scroll_depth', 'search', 'image_view', 'section_open',
 ]);
 const cleanText = (value, maxLength = 160) => String(value || '').trim().slice(0, maxLength);
 const cleanPath = (value) => {
@@ -26,6 +27,36 @@ const requestCountryCode = (req) => {
     || ''
   ).trim().toUpperCase();
   return /^[A-Z]{2}$/.test(value) && !['XX', 'T1'].includes(value) ? value : null;
+};
+const requestLocation = (req) => ({
+  cityName: cleanText(
+    req.get('x-vercel-ip-city') || req.get('cf-ipcity') || req.get('cloudfront-viewer-city'),
+    120
+  ) || null,
+  regionName: cleanText(
+    req.get('x-vercel-ip-country-region') || req.get('cf-region') || req.get('cloudfront-viewer-country-region'),
+    120
+  ) || null,
+});
+const requestDevice = (req) => {
+  const userAgent = String(req.get('user-agent') || '').slice(0, 500);
+  const browserName = /Edg\//i.test(userAgent) ? 'Edge'
+    : /OPR\//i.test(userAgent) ? 'Opera'
+      : /Chrome\//i.test(userAgent) ? 'Chrome'
+        : /Firefox\//i.test(userAgent) ? 'Firefox'
+          : /Safari\//i.test(userAgent) ? 'Safari'
+            : 'Other';
+  const deviceType = /bot|crawler|spider/i.test(userAgent) ? 'Bot'
+    : /tablet|ipad/i.test(userAgent) ? 'Tablet'
+      : /mobile|iphone|android/i.test(userAgent) ? 'Mobile'
+        : 'Desktop';
+  const osName = /Windows/i.test(userAgent) ? 'Windows'
+    : /Android/i.test(userAgent) ? 'Android'
+      : /iPhone|iPad|iOS/i.test(userAgent) ? 'iOS'
+        : /Mac OS/i.test(userAgent) ? 'macOS'
+          : /Linux/i.test(userAgent) ? 'Linux'
+            : 'Other';
+  return { browserName, deviceType, osName };
 };
 
 router.post('/session-role', requireProductAssistantOrAdmin, async (req, res) => {
@@ -95,6 +126,17 @@ router.post('/events', optionalAuth, async (req, res) => {
     const medium = cleanText(body.medium, 120) || null;
     const campaign = cleanText(body.campaign, 180) || null;
     const referrerHost = cleanText(body.referrerHost, 180) || null;
+    const pageLoadId = cleanText(body.pageLoadId, 96) || null;
+    const dedupeKey = createAnalyticsEventDedupeKey({
+      sessionId,
+      eventName,
+      pagePath,
+      productId: cleanText(body.productId, 120) || null,
+      eventValue: Number.isFinite(eventValue) ? eventValue : null,
+      pageLoadId,
+    });
+    const { browserName, deviceType, osName } = requestDevice(req);
+    const { cityName, regionName } = requestLocation(req);
     await pool.query(
       `INSERT INTO storefront_analytics_events
        (event_name, session_id, visitor_id, page_path, page_title, product_id,
@@ -102,11 +144,17 @@ router.post('/events', optionalAuth, async (req, res) => {
         country_code, timezone_name, browser_locale, event_value, duration_seconds,
         audience_type, traffic_type, is_internal_traffic, user_role, device_id,
         page_url, referrer, utm_source, utm_medium, utm_campaign, utm_term,
-        utm_content, gclid, campaign_source, campaign_medium, campaign_name)
+        utm_content, gclid, campaign_source, campaign_medium, campaign_name,
+        page_load_id, event_dedupe_key, browser_name, device_type, os_name,
+        city_name, region_name, ad_group)
        VALUES (
          $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,
-         $18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29,$30,$31,$32,$33
-       )`,
+         $18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29,$30,$31,$32,$33,
+         $34,$35,$36,$37,$38,$39,$40,$41
+       )
+       ON CONFLICT (event_dedupe_key)
+       WHERE event_dedupe_key IS NOT NULL
+       DO NOTHING`,
       [
         eventName,
         sessionId,
@@ -141,6 +189,14 @@ router.post('/events', optionalAuth, async (req, res) => {
         source,
         medium,
         campaign,
+        pageLoadId,
+        dedupeKey,
+        browserName,
+        deviceType,
+        osName,
+        cityName,
+        regionName,
+        cleanText(body.adGroup, 180) || cleanText(body.utmContent, 180) || null,
       ]
     );
     return res.status(202).json({ ok: true });

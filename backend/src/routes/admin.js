@@ -1153,7 +1153,7 @@ router.get('/traffic-insights', async (_req, res) => {
           COUNT(*) FILTER (WHERE event_name = 'product_view') AS product_views,
           COALESCE(ROUND(AVG(duration_seconds) FILTER (WHERE event_name = 'page_exit' AND duration_seconds IS NOT NULL)), 0) AS average_seconds
         FROM storefront_analytics_events
-        WHERE audience_type = 'customer'
+        WHERE traffic_type = 'customer' AND is_internal_traffic = FALSE AND is_duplicate = FALSE
           AND occurred_at >= NOW() - INTERVAL '30 days'
       `),
       pool.query(`
@@ -1162,7 +1162,7 @@ router.get('/traffic-insights', async (_req, res) => {
           COALESCE(NULLIF(medium, ''), 'organic / referral') AS medium,
           COUNT(DISTINCT session_id) AS sessions
         FROM storefront_analytics_events
-        WHERE audience_type = 'customer'
+        WHERE traffic_type = 'customer' AND is_internal_traffic = FALSE AND is_duplicate = FALSE
           AND event_name = 'session_start' AND occurred_at >= NOW() - INTERVAL '30 days'
         GROUP BY 1, 2
         ORDER BY sessions DESC
@@ -1176,7 +1176,7 @@ router.get('/traffic-insights', async (_req, res) => {
           COUNT(DISTINCT session_id) AS sessions,
           MAX(occurred_at) AS latest_visit
         FROM storefront_analytics_events
-        WHERE audience_type = 'customer'
+        WHERE traffic_type = 'customer' AND is_internal_traffic = FALSE AND is_duplicate = FALSE
           AND event_name = 'session_start'
           AND occurred_at >= NOW() - INTERVAL '30 days'
           AND (country_code IS NOT NULL OR timezone_name IS NOT NULL)
@@ -1187,7 +1187,7 @@ router.get('/traffic-insights', async (_req, res) => {
       pool.query(`
         SELECT page_path, MAX(page_title) AS page_title, COUNT(*) AS views
         FROM storefront_analytics_events
-        WHERE audience_type = 'customer'
+        WHERE traffic_type = 'customer' AND is_internal_traffic = FALSE AND is_duplicate = FALSE
           AND event_name = 'page_view' AND occurred_at >= NOW() - INTERVAL '30 days'
         GROUP BY page_path
         ORDER BY views DESC
@@ -1199,7 +1199,7 @@ router.get('/traffic-insights', async (_req, res) => {
                COUNT(*) FILTER (WHERE event_name = 'product_click') AS clicks,
                COUNT(*) FILTER (WHERE event_name = 'add_to_cart') AS add_to_cart
         FROM storefront_analytics_events
-        WHERE audience_type = 'customer'
+        WHERE traffic_type = 'customer' AND is_internal_traffic = FALSE AND is_duplicate = FALSE
           AND product_id IS NOT NULL AND occurred_at >= NOW() - INTERVAL '30 days'
         GROUP BY product_id
         ORDER BY views DESC, clicks DESC
@@ -1208,7 +1208,7 @@ router.get('/traffic-insights', async (_req, res) => {
       pool.query(`
         SELECT EXTRACT(HOUR FROM (occurred_at AT TIME ZONE 'UTC' AT TIME ZONE 'Africa/Johannesburg'))::int AS hour, COUNT(DISTINCT session_id) AS sessions
         FROM storefront_analytics_events
-        WHERE audience_type = 'customer'
+        WHERE traffic_type = 'customer' AND is_internal_traffic = FALSE AND is_duplicate = FALSE
           AND occurred_at >= NOW() - INTERVAL '30 days'
         GROUP BY 1
         ORDER BY sessions DESC, hour ASC
@@ -1222,7 +1222,7 @@ router.get('/traffic-insights', async (_req, res) => {
           COUNT(DISTINCT session_id) FILTER (WHERE event_name = 'begin_checkout') AS checkout_sessions,
           COUNT(DISTINCT session_id) FILTER (WHERE event_name = 'payment_started') AS payment_sessions
         FROM storefront_analytics_events
-        WHERE audience_type = 'customer'
+        WHERE traffic_type = 'customer' AND is_internal_traffic = FALSE AND is_duplicate = FALSE
           AND occurred_at >= NOW() - INTERVAL '30 days'
       `),
       pool.query(`
@@ -1251,46 +1251,109 @@ router.get('/traffic-insights', async (_req, res) => {
           COUNT(*) FILTER (WHERE event_name = 'page_view') AS page_views,
           MAX(occurred_at) AS latest_activity
         FROM storefront_analytics_events
-        WHERE audience_type IN ('superuser', 'staff')
+        WHERE traffic_type = 'superuser' AND is_duplicate = FALSE
           AND occurred_at >= NOW() - INTERVAL '30 days'
         GROUP BY audience_type
         ORDER BY audience_type
       `),
       pool.query(`
+        WITH clean_events AS (
+          SELECT *
+          FROM storefront_analytics_events
+          WHERE traffic_type = 'customer'
+            AND is_internal_traffic = FALSE
+            AND is_duplicate = FALSE
+            AND occurred_at >= NOW() - INTERVAL '90 days'
+        ),
+        session_rollup AS (
+          SELECT
+            session_id,
+            MAX(visitor_id) AS visitor_id,
+            MIN(occurred_at) AS started_at,
+            MAX(occurred_at) AS latest_activity,
+            MAX(NULLIF(source, '')) AS source,
+            MAX(NULLIF(referrer_host, '')) AS referrer_host,
+            MAX(NULLIF(utm_term, '')) AS google_search_term,
+            MAX(NULLIF(utm_campaign, '')) AS campaign,
+            MAX(NULLIF(ad_group, '')) AS ad_group,
+            MAX(NULLIF(gclid, '')) AS gclid,
+            MAX(NULLIF(browser_name, '')) AS browser_name,
+            MAX(NULLIF(device_type, '')) AS device_type,
+            MAX(NULLIF(os_name, '')) AS os_name,
+            MAX(NULLIF(city_name, '')) AS city_name,
+            MAX(NULLIF(region_name, '')) AS region_name,
+            MAX(country_code) AS country_code,
+            MAX(timezone_name) AS timezone_name,
+            GREATEST(
+              EXTRACT(EPOCH FROM MAX(occurred_at) - MIN(occurred_at))::int,
+              COALESCE(MAX(duration_seconds) FILTER (WHERE event_name = 'page_exit'), 0)
+            ) AS session_duration_seconds,
+            COUNT(DISTINCT page_path) FILTER (WHERE event_name = 'page_view') AS pages_viewed,
+            COUNT(DISTINCT product_id) FILTER (WHERE event_name = 'product_view') AS products_viewed_count,
+            ARRAY_REMOVE(
+              ARRAY_AGG(DISTINCT product_name) FILTER (
+                WHERE event_name = 'product_view' AND product_name IS NOT NULL
+              ),
+              NULL
+            ) AS products_viewed,
+            COALESCE(MAX(event_value) FILTER (WHERE event_name = 'scroll_depth'), 0) AS scroll_depth,
+            (
+              COUNT(DISTINCT product_id) FILTER (WHERE event_name = 'product_view')
+              + COUNT(*) FILTER (WHERE event_name = 'image_view')
+            ) AS images_viewed,
+            BOOL_OR(
+              event_name = 'section_open' AND LOWER(COALESCE(page_title, '')) LIKE '%deliver%'
+              OR event_name = 'page_view' AND page_path = '/shipping'
+            ) AS delivery_opened,
+            BOOL_OR(
+              event_name = 'section_open' AND LOWER(COALESCE(page_title, '')) LIKE '%return%'
+              OR event_name = 'page_view' AND page_path = '/returns'
+            ) AS returns_opened,
+            BOOL_OR(event_name = 'add_to_cart') AS added_to_cart,
+            BOOL_OR(event_name IN ('begin_checkout', 'checkout_step')) AS checkout_started,
+            BOOL_OR(event_name = 'purchase') AS purchased,
+            COALESCE(
+              (ARRAY_AGG(page_path ORDER BY occurred_at DESC) FILTER (WHERE event_name = 'page_exit'))[1],
+              (ARRAY_AGG(page_path ORDER BY occurred_at DESC))[1]
+            ) AS exit_page
+          FROM clean_events
+          WHERE occurred_at >= NOW() - INTERVAL '7 days'
+          GROUP BY session_id
+        )
         SELECT
-          session_id,
-          MIN(occurred_at) AS started_at,
-          MAX(occurred_at) AS latest_activity,
-          MAX(NULLIF(source, '')) AS source,
-          MAX(NULLIF(referrer_host, '')) AS referrer_host,
-          MAX(country_code) AS country_code,
-          MAX(timezone_name) AS timezone_name,
-          JSON_AGG(
-            JSON_BUILD_OBJECT(
-              'eventName', event_name,
-              'pagePath', page_path,
-              'pageTitle', page_title,
-              'productName', product_name,
-              'eventValue', event_value,
-              'occurredAt', occurred_at
-            ) ORDER BY occurred_at
-          ) FILTER (
-            WHERE event_name IN (
-              'page_view', 'category_view', 'product_view', 'add_to_cart',
-              'begin_checkout', 'payment_started', 'scroll_depth'
+          rollup.*,
+          EXISTS (
+            SELECT 1
+            FROM storefront_analytics_events AS earlier
+            WHERE earlier.visitor_id = rollup.visitor_id
+              AND earlier.session_id <> rollup.session_id
+              AND earlier.occurred_at < rollup.started_at
+              AND earlier.traffic_type = 'customer'
+              AND earlier.is_internal_traffic = FALSE
+              AND earlier.is_duplicate = FALSE
+          ) AS is_returning,
+          (
+            SELECT JSON_AGG(
+              JSON_BUILD_OBJECT(
+                'eventName', step.event_name,
+                'pagePath', step.page_path,
+                'pageTitle', step.page_title,
+                'productName', step.product_name,
+                'eventValue', step.event_value,
+                'occurredAt', step.occurred_at
+              ) ORDER BY step.occurred_at
             )
+            FROM clean_events AS step
+            WHERE step.session_id = rollup.session_id
+              AND step.event_name IN (
+                'page_view', 'category_view', 'product_view', 'image_view',
+                'section_open', 'add_to_cart', 'remove_from_cart',
+                'begin_checkout', 'checkout_step', 'payment_started',
+                'purchase', 'scroll_depth', 'page_exit'
+              )
           ) AS steps
-        FROM storefront_analytics_events
-        WHERE audience_type = 'customer'
-          AND occurred_at >= NOW() - INTERVAL '7 days'
-        GROUP BY session_id
-        HAVING COUNT(*) FILTER (
-          WHERE event_name IN (
-            'page_view', 'category_view', 'product_view', 'add_to_cart',
-            'begin_checkout', 'payment_started', 'scroll_depth'
-          )
-        ) > 0
-        ORDER BY MAX(occurred_at) DESC
+        FROM session_rollup AS rollup
+        ORDER BY rollup.latest_activity DESC
         LIMIT 20
       `),
     ]);

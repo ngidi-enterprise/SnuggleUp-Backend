@@ -448,6 +448,15 @@ async function initDb() {
       campaign_source TEXT,
       campaign_medium TEXT,
       campaign_name TEXT,
+      page_load_id TEXT,
+      event_dedupe_key TEXT,
+      is_duplicate BOOLEAN NOT NULL DEFAULT FALSE,
+      browser_name TEXT,
+      device_type TEXT,
+      os_name TEXT,
+      city_name TEXT,
+      region_name TEXT,
+      ad_group TEXT,
       event_value INTEGER,
       duration_seconds INTEGER,
       occurred_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
@@ -472,6 +481,15 @@ async function initDb() {
   await pool.query(`ALTER TABLE storefront_analytics_events ADD COLUMN IF NOT EXISTS campaign_source TEXT;`);
   await pool.query(`ALTER TABLE storefront_analytics_events ADD COLUMN IF NOT EXISTS campaign_medium TEXT;`);
   await pool.query(`ALTER TABLE storefront_analytics_events ADD COLUMN IF NOT EXISTS campaign_name TEXT;`);
+  await pool.query(`ALTER TABLE storefront_analytics_events ADD COLUMN IF NOT EXISTS page_load_id TEXT;`);
+  await pool.query(`ALTER TABLE storefront_analytics_events ADD COLUMN IF NOT EXISTS event_dedupe_key TEXT;`);
+  await pool.query(`ALTER TABLE storefront_analytics_events ADD COLUMN IF NOT EXISTS is_duplicate BOOLEAN NOT NULL DEFAULT FALSE;`);
+  await pool.query(`ALTER TABLE storefront_analytics_events ADD COLUMN IF NOT EXISTS browser_name TEXT;`);
+  await pool.query(`ALTER TABLE storefront_analytics_events ADD COLUMN IF NOT EXISTS device_type TEXT;`);
+  await pool.query(`ALTER TABLE storefront_analytics_events ADD COLUMN IF NOT EXISTS os_name TEXT;`);
+  await pool.query(`ALTER TABLE storefront_analytics_events ADD COLUMN IF NOT EXISTS city_name TEXT;`);
+  await pool.query(`ALTER TABLE storefront_analytics_events ADD COLUMN IF NOT EXISTS region_name TEXT;`);
+  await pool.query(`ALTER TABLE storefront_analytics_events ADD COLUMN IF NOT EXISTS ad_group TEXT;`);
   await pool.query(`ALTER TABLE storefront_analytics_events ADD COLUMN IF NOT EXISTS event_value INTEGER;`);
   await pool.query(`
     CREATE TABLE IF NOT EXISTS storefront_analytics_audiences (
@@ -484,6 +502,32 @@ async function initDb() {
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_storefront_analytics_events_name_time ON storefront_analytics_events(event_name, occurred_at DESC);`);
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_storefront_analytics_events_product ON storefront_analytics_events(product_id) WHERE product_id IS NOT NULL;`);
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_storefront_analytics_events_traffic_time ON storefront_analytics_events(traffic_type, is_internal_traffic, occurred_at DESC);`);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_storefront_analytics_events_visitor_time ON storefront_analytics_events(visitor_id, occurred_at DESC);`);
+  await pool.query(`CREATE UNIQUE INDEX IF NOT EXISTS idx_storefront_analytics_events_dedupe ON storefront_analytics_events(event_dedupe_key) WHERE event_dedupe_key IS NOT NULL;`);
+  await pool.query(`
+    WITH ranked_automatic_events AS (
+      SELECT
+        id,
+        ROW_NUMBER() OVER (
+          PARTITION BY
+            session_id,
+            event_name,
+            COALESCE(page_path, ''),
+            COALESCE(product_id, ''),
+            COALESCE(event_value, -1),
+            FLOOR(EXTRACT(EPOCH FROM occurred_at) / 5)
+          ORDER BY occurred_at, id
+        ) AS duplicate_rank
+      FROM storefront_analytics_events
+      WHERE event_name IN ('session_start', 'page_view', 'product_view', 'scroll_depth')
+    )
+    UPDATE storefront_analytics_events AS events
+    SET is_duplicate = TRUE
+    FROM ranked_automatic_events AS ranked
+    WHERE events.id = ranked.id
+      AND ranked.duplicate_rank > 1
+      AND events.is_duplicate = FALSE
+  `);
   await pool.query(`
     UPDATE storefront_analytics_events
     SET
