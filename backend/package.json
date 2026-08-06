@@ -7,7 +7,7 @@
   "scripts": {
     "start": "node src/server.js",
     "dev": "nodemon src/server.js",
-    "test": "node --test test/analyticsTrafficClassifier.test.js test/analyticsEventDeduplication.test.js test/analyticsRoutePolicy.test.js test/analyticsAdminDevice.test.js"
+    "test": "node --test test/analyticsTrafficClassifier.test.js test/analyticsEventDeduplication.test.js test/analyticsRoutePolicy.test.js test/analyticsAdminDevice.test.js test/analyticsEventTiming.test.js"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.32.0",

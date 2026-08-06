@@ -1258,8 +1258,14 @@ router.get('/traffic-insights', async (_req, res) => {
       `),
       pool.query(`
         WITH clean_events AS (
-          SELECT *
+          SELECT
+            events.*,
+            COALESCE(
+              events.client_occurred_at,
+              events.occurred_at AT TIME ZONE 'UTC'
+            ) AS event_time
           FROM storefront_analytics_events
+          AS events
           WHERE traffic_type = 'customer'
             AND is_internal_traffic = FALSE
             AND is_duplicate = FALSE
@@ -1269,8 +1275,8 @@ router.get('/traffic-insights', async (_req, res) => {
           SELECT
             session_id,
             MAX(visitor_id) AS visitor_id,
-            MIN(occurred_at) AS started_at,
-            MAX(occurred_at) AS latest_activity,
+            MIN(event_time) AS started_at,
+            MAX(event_time) AS latest_activity,
             MAX(NULLIF(source, '')) AS source,
             MAX(NULLIF(referrer_host, '')) AS referrer_host,
             MAX(NULLIF(utm_term, '')) AS google_search_term,
@@ -1285,7 +1291,7 @@ router.get('/traffic-insights', async (_req, res) => {
             MAX(country_code) AS country_code,
             MAX(timezone_name) AS timezone_name,
             GREATEST(
-              EXTRACT(EPOCH FROM MAX(occurred_at) - MIN(occurred_at))::int,
+              EXTRACT(EPOCH FROM MAX(event_time) - MIN(event_time))::int,
               COALESCE(MAX(duration_seconds) FILTER (WHERE event_name = 'page_exit'), 0)
             ) AS session_duration_seconds,
             COUNT(DISTINCT page_path) FILTER (WHERE event_name = 'page_view') AS pages_viewed,
@@ -1313,8 +1319,8 @@ router.get('/traffic-insights', async (_req, res) => {
             BOOL_OR(event_name IN ('begin_checkout', 'checkout_step')) AS checkout_started,
             BOOL_OR(event_name = 'purchase') AS purchased,
             COALESCE(
-              (ARRAY_AGG(page_path ORDER BY occurred_at DESC) FILTER (WHERE event_name = 'page_exit'))[1],
-              (ARRAY_AGG(page_path ORDER BY occurred_at DESC))[1]
+              (ARRAY_AGG(page_path ORDER BY event_time DESC, event_sequence DESC NULLS LAST) FILTER (WHERE event_name = 'page_exit'))[1],
+              (ARRAY_AGG(page_path ORDER BY event_time DESC, event_sequence DESC NULLS LAST))[1]
             ) AS exit_page
           FROM clean_events
           WHERE occurred_at >= NOW() - INTERVAL '7 days'
@@ -1327,7 +1333,7 @@ router.get('/traffic-insights', async (_req, res) => {
             FROM storefront_analytics_events AS earlier
             WHERE earlier.visitor_id = rollup.visitor_id
               AND earlier.session_id <> rollup.session_id
-              AND earlier.occurred_at < rollup.started_at
+              AND (earlier.occurred_at AT TIME ZONE 'UTC') < rollup.started_at
               AND earlier.traffic_type = 'customer'
               AND earlier.is_internal_traffic = FALSE
               AND earlier.is_duplicate = FALSE
@@ -1340,8 +1346,24 @@ router.get('/traffic-insights', async (_req, res) => {
                 'pageTitle', step.page_title,
                 'productName', step.product_name,
                 'eventValue', step.event_value,
-                'occurredAt', step.occurred_at AT TIME ZONE 'UTC'
-              ) ORDER BY step.occurred_at
+                'occurredAt', step.event_time
+              ) ORDER BY
+                CASE
+                  WHEN step.event_sequence IS NULL THEN DATE_TRUNC('second', step.event_time)
+                  ELSE step.event_time
+                END,
+                CASE
+                  WHEN step.event_sequence IS NULL THEN
+                    CASE
+                      WHEN step.event_name = 'page_view' THEN 0
+                      WHEN step.event_name = 'page_exit' THEN 9
+                      ELSE 4
+                    END
+                  ELSE 0
+                END,
+                step.event_sequence NULLS LAST,
+                step.event_time,
+                step.occurred_at
             )
             FROM clean_events AS step
             WHERE step.session_id = rollup.session_id

@@ -12,6 +12,10 @@ import {
   hashAdminDeviceToken,
   readCookie,
 } from '../services/analyticsAdminDevice.js';
+import {
+  normalizeClientOccurredAt,
+  normalizeEventSequence,
+} from '../services/analyticsEventTiming.js';
 
 export const router = express.Router();
 
@@ -305,11 +309,11 @@ router.post('/events', optionalAuth, async (req, res) => {
         page_url, referrer, utm_source, utm_medium, utm_campaign, utm_term,
         utm_content, gclid, campaign_source, campaign_medium, campaign_name,
         page_load_id, event_dedupe_key, browser_name, device_type, os_name,
-        city_name, region_name, ad_group)
+        city_name, region_name, ad_group, client_occurred_at, event_sequence)
        VALUES (
          $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,
          $18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29,$30,$31,$32,$33,
-         $34,$35,$36,$37,$38,$39,$40,$41
+         $34,$35,$36,$37,$38,$39,$40,$41,$42,$43
        )
        ON CONFLICT (event_dedupe_key)
        WHERE event_dedupe_key IS NOT NULL
@@ -356,6 +360,8 @@ router.post('/events', optionalAuth, async (req, res) => {
         cityName,
         regionName,
         cleanText(body.adGroup, 180) || cleanText(body.utmContent, 180) || null,
+        normalizeClientOccurredAt(body.clientOccurredAt),
+        normalizeEventSequence(body.eventSequence),
       ]
     );
     return res.status(202).json({ ok: true });

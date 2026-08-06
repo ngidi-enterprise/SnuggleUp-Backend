@@ -457,6 +457,8 @@ async function initDb() {
       city_name TEXT,
       region_name TEXT,
       ad_group TEXT,
+      client_occurred_at TIMESTAMPTZ,
+      event_sequence BIGINT,
       event_value INTEGER,
       duration_seconds INTEGER,
       occurred_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
@@ -490,6 +492,8 @@ async function initDb() {
   await pool.query(`ALTER TABLE storefront_analytics_events ADD COLUMN IF NOT EXISTS city_name TEXT;`);
   await pool.query(`ALTER TABLE storefront_analytics_events ADD COLUMN IF NOT EXISTS region_name TEXT;`);
   await pool.query(`ALTER TABLE storefront_analytics_events ADD COLUMN IF NOT EXISTS ad_group TEXT;`);
+  await pool.query(`ALTER TABLE storefront_analytics_events ADD COLUMN IF NOT EXISTS client_occurred_at TIMESTAMPTZ;`);
+  await pool.query(`ALTER TABLE storefront_analytics_events ADD COLUMN IF NOT EXISTS event_sequence BIGINT;`);
   await pool.query(`ALTER TABLE storefront_analytics_events ADD COLUMN IF NOT EXISTS event_value INTEGER;`);
   await pool.query(`
     CREATE TABLE IF NOT EXISTS storefront_analytics_audiences (
