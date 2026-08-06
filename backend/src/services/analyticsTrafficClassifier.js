@@ -23,6 +23,10 @@ export const classifyAnalyticsTraffic = ({ access, existingAudienceType } = {}) 
     return classificationForTrafficType(TRAFFIC_TYPES.SUPERUSER, 'superuser');
   }
 
+  if (access?.isProductAssistant) {
+    return classificationForTrafficType(TRAFFIC_TYPES.SUPERUSER, 'product_assistant');
+  }
+
   if (existingAudienceType === 'superuser') {
     return classificationForTrafficType(TRAFFIC_TYPES.SUPERUSER, 'superuser');
   }

@@ -4,6 +4,7 @@ import { optionalAuth } from '../middleware/auth.js';
 import { getUserAccess, requireProductAssistantOrAdmin } from '../middleware/admin.js';
 import { classifyAnalyticsTraffic } from '../services/analyticsTrafficClassifier.js';
 import { createAnalyticsEventDedupeKey } from '../services/analyticsEventDeduplication.js';
+import { isManagementAnalyticsPath } from '../services/analyticsRoutePolicy.js';
 
 export const router = express.Router();
 
@@ -70,7 +71,8 @@ router.post('/session-role', requireProductAssistantOrAdmin, async (req, res) =>
       `INSERT INTO storefront_analytics_audiences (visitor_id, audience_type, updated_at)
        VALUES ($1, $2, CURRENT_TIMESTAMP)
        ON CONFLICT (visitor_id) DO UPDATE
-       SET audience_type = EXCLUDED.audience_type, updated_at = CURRENT_TIMESTAMP`,
+       SET audience_type = EXCLUDED.audience_type,
+           updated_at = CURRENT_TIMESTAMP`,
       [visitorId, audienceType]
     );
     const result = await pool.query(
@@ -102,6 +104,10 @@ router.post('/events', optionalAuth, async (req, res) => {
     if (!ALLOWED_EVENTS.has(eventName) || !sessionId || !visitorId) {
       return res.status(400).json({ error: 'Invalid analytics event' });
     }
+    const pagePath = cleanPath(body.pagePath);
+    if (isManagementAnalyticsPath(pagePath)) {
+      return res.status(202).json({ ok: true, excluded: 'management_route' });
+    }
 
     const duration = Number.parseInt(body.durationSeconds, 10);
     const eventValue = Number.parseInt(body.eventValue, 10);
@@ -121,7 +127,6 @@ router.post('/events', optionalAuth, async (req, res) => {
     const audienceType = classification.trafficType === 'superuser'
       ? (classification.userRole === 'product_assistant' ? 'staff' : 'superuser')
       : 'customer';
-    const pagePath = cleanPath(body.pagePath);
     const source = cleanText(body.source, 120) || null;
     const medium = cleanText(body.medium, 120) || null;
     const campaign = cleanText(body.campaign, 180) || null;

@@ -33,12 +33,32 @@ test('normal authenticated customer remains customer traffic', () => {
   });
 });
 
-test('existing server-classified staff audience remains internal', () => {
+test('authenticated product assistant traffic remains internal', () => {
   assert.deepEqual(classifyAnalyticsTraffic({
-    existingAudienceType: 'staff',
+    access: { role: 'product_assistant', isProductAssistant: true },
   }), {
     trafficType: TRAFFIC_TYPES.SUPERUSER,
     isInternalTraffic: true,
     userRole: 'product_assistant',
+  });
+});
+
+test('logged-out traffic from a verified superuser browser remains internal', () => {
+  assert.deepEqual(classifyAnalyticsTraffic({
+    existingAudienceType: 'superuser',
+  }), {
+    trafficType: TRAFFIC_TYPES.SUPERUSER,
+    isInternalTraffic: true,
+    userRole: 'superuser',
+  });
+});
+
+test('an unrecognised logged-out browser remains customer traffic', () => {
+  assert.deepEqual(classifyAnalyticsTraffic({
+    existingAudienceType: null,
+  }), {
+    trafficType: TRAFFIC_TYPES.CUSTOMER,
+    isInternalTraffic: false,
+    userRole: null,
   });
 });
