@@ -1,10 +1,17 @@
 import express from 'express';
 import pool from '../db.js';
 import { optionalAuth } from '../middleware/auth.js';
-import { getUserAccess, requireProductAssistantOrAdmin } from '../middleware/admin.js';
+import { getUserAccess, requireAdmin, requireProductAssistantOrAdmin } from '../middleware/admin.js';
 import { classifyAnalyticsTraffic } from '../services/analyticsTrafficClassifier.js';
 import { createAnalyticsEventDedupeKey } from '../services/analyticsEventDeduplication.js';
 import { isManagementAnalyticsPath } from '../services/analyticsRoutePolicy.js';
+import {
+  ADMIN_DEVICE_COOKIE,
+  adminDeviceCookieHeader,
+  createAdminDeviceToken,
+  hashAdminDeviceToken,
+  readCookie,
+} from '../services/analyticsAdminDevice.js';
 
 export const router = express.Router();
 
@@ -59,6 +66,147 @@ const requestDevice = (req) => {
             : 'Other';
   return { browserName, deviceType, osName };
 };
+const adminDeviceMutationAttempts = new Map();
+const requireAdminDeviceMutationAllowance = (req, res, next) => {
+  const key = String(req.access?.userId || req.access?.email || 'unknown');
+  const now = Date.now();
+  const windowMs = 15 * 60 * 1000;
+  const attempts = (adminDeviceMutationAttempts.get(key) || []).filter((time) => now - time < windowMs);
+  if (attempts.length >= 6) {
+    return res.status(429).json({ error: 'Too many device-setting changes. Please try again later.' });
+  }
+  attempts.push(now);
+  adminDeviceMutationAttempts.set(key, attempts);
+  return next();
+};
+const activeAdminDevice = async (req, { touch = false } = {}) => {
+  const token = readCookie(req.get('cookie'), ADMIN_DEVICE_COOKIE);
+  if (!token) return null;
+  const tokenHash = hashAdminDeviceToken(token);
+  const result = await pool.query(
+    `${touch
+      ? 'UPDATE storefront_analytics_admin_devices SET last_seen_at = CURRENT_TIMESTAMP'
+      : 'SELECT * FROM storefront_analytics_admin_devices'}
+     WHERE token_hash = $1 AND revoked_at IS NULL
+     ${touch ? 'RETURNING *' : 'LIMIT 1'}`,
+    [tokenHash]
+  );
+  return result.rows[0] || null;
+};
+
+router.get('/admin-device', requireAdmin, async (req, res) => {
+  try {
+    const device = await activeAdminDevice(req);
+    return res.json({
+      excluded: Boolean(device),
+      device: device ? {
+        id: `admin-device-${device.id}`,
+        label: device.device_label,
+        createdAt: device.created_at,
+        lastSeenAt: device.last_seen_at,
+      } : null,
+    });
+  } catch (error) {
+    console.error('[storefront-analytics] device status failed:', error.message);
+    return res.status(500).json({ error: 'Unable to load device exclusion status' });
+  }
+});
+
+router.post('/admin-device', requireAdmin, requireAdminDeviceMutationAllowance, async (req, res) => {
+  try {
+    const visitorId = cleanText(req.body?.visitorId, 96);
+    if (!visitorId) return res.status(400).json({ error: 'Analytics visitor is required' });
+
+    const currentDevice = await activeAdminDevice(req);
+    if (currentDevice) {
+      await pool.query(
+        `UPDATE storefront_analytics_admin_devices
+         SET revoked_at = CURRENT_TIMESTAMP
+         WHERE id = $1`,
+        [currentDevice.id]
+      );
+    }
+
+    const token = createAdminDeviceToken();
+    const tokenHash = hashAdminDeviceToken(token);
+    const inserted = await pool.query(
+      `INSERT INTO storefront_analytics_admin_devices
+       (token_hash, device_label, created_by_user_id, created_by_email)
+       VALUES ($1, $2, $3, $4)
+       RETURNING id, device_label, created_at`,
+      [
+        tokenHash,
+        cleanText(req.body?.label, 120) || 'Registered superuser browser',
+        cleanText(req.access?.userId, 120) || null,
+        cleanText(req.access?.email, 180) || null,
+      ]
+    );
+    await pool.query(
+      `INSERT INTO storefront_analytics_audiences (visitor_id, audience_type, updated_at)
+       VALUES ($1, 'superuser', CURRENT_TIMESTAMP)
+       ON CONFLICT (visitor_id) DO UPDATE
+       SET audience_type = 'superuser', updated_at = CURRENT_TIMESTAMP`,
+      [visitorId]
+    );
+    await pool.query(
+      `DELETE FROM storefront_analytics_audience_opt_ins WHERE visitor_id = $1`,
+      [visitorId]
+    );
+    res.setHeader('Set-Cookie', adminDeviceCookieHeader(token, {
+      production: process.env.NODE_ENV === 'production',
+    }));
+    return res.status(201).json({
+      excluded: true,
+      device: {
+        id: `admin-device-${inserted.rows[0].id}`,
+        label: inserted.rows[0].device_label,
+        createdAt: inserted.rows[0].created_at,
+      },
+    });
+  } catch (error) {
+    console.error('[storefront-analytics] device registration failed:', error.message);
+    return res.status(500).json({ error: 'Unable to exclude this device' });
+  }
+});
+
+router.delete('/admin-device', requireAdmin, requireAdminDeviceMutationAllowance, async (req, res) => {
+  try {
+    const visitorId = cleanText(req.body?.visitorId, 96);
+    const token = readCookie(req.get('cookie'), ADMIN_DEVICE_COOKIE);
+    if (token) {
+      await pool.query(
+        `UPDATE storefront_analytics_admin_devices
+         SET revoked_at = CURRENT_TIMESTAMP
+         WHERE token_hash = $1 AND revoked_at IS NULL`,
+        [hashAdminDeviceToken(token)]
+      );
+    }
+    if (visitorId) {
+      await pool.query(
+        `DELETE FROM storefront_analytics_audiences
+         WHERE visitor_id = $1`,
+        [visitorId]
+      );
+      await pool.query(
+        `INSERT INTO storefront_analytics_audience_opt_ins
+         (visitor_id, opted_in_at, opted_in_by_email)
+         VALUES ($1, CURRENT_TIMESTAMP, $2)
+         ON CONFLICT (visitor_id) DO UPDATE
+         SET opted_in_at = CURRENT_TIMESTAMP,
+             opted_in_by_email = EXCLUDED.opted_in_by_email`,
+        [visitorId, cleanText(req.access?.email, 180) || null]
+      );
+    }
+    res.setHeader('Set-Cookie', adminDeviceCookieHeader('', {
+      production: process.env.NODE_ENV === 'production',
+      clear: true,
+    }));
+    return res.json({ excluded: false });
+  } catch (error) {
+    console.error('[storefront-analytics] device revocation failed:', error.message);
+    return res.status(500).json({ error: 'Unable to include this device again' });
+  }
+});
 
 router.post('/session-role', requireProductAssistantOrAdmin, async (req, res) => {
   try {
@@ -69,7 +217,10 @@ router.post('/session-role', requireProductAssistantOrAdmin, async (req, res) =>
     const audienceType = req.access?.isSuperuser ? 'superuser' : 'staff';
     await pool.query(
       `INSERT INTO storefront_analytics_audiences (visitor_id, audience_type, updated_at)
-       VALUES ($1, $2, CURRENT_TIMESTAMP)
+       SELECT $1, $2, CURRENT_TIMESTAMP
+       WHERE NOT EXISTS (
+         SELECT 1 FROM storefront_analytics_audience_opt_ins WHERE visitor_id = $1
+       )
        ON CONFLICT (visitor_id) DO UPDATE
        SET audience_type = EXCLUDED.audience_type,
            updated_at = CURRENT_TIMESTAMP`,
@@ -115,15 +266,18 @@ router.post('/events', optionalAuth, async (req, res) => {
     if (req.user) {
       access = await getUserAccess(req);
     }
-    const audienceResult = await pool.query(
-      `SELECT audience_type
-       FROM storefront_analytics_audiences
-       WHERE visitor_id = $1
-       LIMIT 1`,
-      [visitorId]
-    );
+    const [audienceResult, adminDevice] = await Promise.all([
+      pool.query(
+        `SELECT audience_type
+         FROM storefront_analytics_audiences
+         WHERE visitor_id = $1
+         LIMIT 1`,
+        [visitorId]
+      ),
+      activeAdminDevice(req, { touch: true }),
+    ]);
     const existingAudienceType = audienceResult.rows[0]?.audience_type || null;
-    const classification = classifyAnalyticsTraffic({ access, existingAudienceType });
+    const classification = classifyAnalyticsTraffic({ access, existingAudienceType, adminDevice });
     const audienceType = classification.trafficType === 'superuser'
       ? (classification.userRole === 'product_assistant' ? 'staff' : 'superuser')
       : 'customer';
@@ -182,7 +336,7 @@ router.post('/events', optionalAuth, async (req, res) => {
         classification.trafficType,
         classification.isInternalTraffic,
         classification.userRole,
-        null,
+        classification.deviceId,
         pagePath,
         referrerHost,
         source,

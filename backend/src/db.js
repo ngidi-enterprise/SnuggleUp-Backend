@@ -498,6 +498,26 @@ async function initDb() {
       updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
     );
   `);
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS storefront_analytics_admin_devices (
+      id BIGSERIAL PRIMARY KEY,
+      token_hash TEXT UNIQUE NOT NULL,
+      device_label TEXT NOT NULL DEFAULT 'Registered superuser browser',
+      created_by_user_id TEXT,
+      created_by_email TEXT,
+      created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      last_seen_at TIMESTAMP,
+      revoked_at TIMESTAMP
+    );
+  `);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_storefront_admin_devices_active_hash ON storefront_analytics_admin_devices(token_hash) WHERE revoked_at IS NULL;`);
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS storefront_analytics_audience_opt_ins (
+      visitor_id TEXT PRIMARY KEY,
+      opted_in_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      opted_in_by_email TEXT
+    );
+  `);
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_storefront_analytics_events_time ON storefront_analytics_events(occurred_at DESC);`);
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_storefront_analytics_events_name_time ON storefront_analytics_events(event_name, occurred_at DESC);`);
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_storefront_analytics_events_product ON storefront_analytics_events(product_id) WHERE product_id IS NOT NULL;`);
