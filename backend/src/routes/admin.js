@@ -1340,7 +1340,7 @@ router.get('/traffic-insights', async (_req, res) => {
                 'pageTitle', step.page_title,
                 'productName', step.product_name,
                 'eventValue', step.event_value,
-                'occurredAt', step.occurred_at
+                'occurredAt', step.occurred_at AT TIME ZONE 'UTC'
               ) ORDER BY step.occurred_at
             )
             FROM clean_events AS step
