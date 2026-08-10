@@ -36,6 +36,159 @@ function storeCJSubmission(orderNumber, request, response, error = null) {
   }
 }
 
+const analyticsMonthWindow = (monthValue) => {
+  const match = /^(\d{4})-(\d{2})$/.exec(String(monthValue || ''));
+  if (!match) return null;
+  const year = Number(match[1]);
+  const month = Number(match[2]);
+  if (year < 2020 || year > 2100 || month < 1 || month > 12) return null;
+
+  const nextYear = month === 12 ? year + 1 : year;
+  const nextMonth = month === 12 ? 1 : month + 1;
+  const pad = (value) => String(value).padStart(2, '0');
+  return {
+    month: `${year}-${pad(month)}`,
+    start: `${year}-${pad(month)}-01T00:00:00+02:00`,
+    end: `${nextYear}-${pad(nextMonth)}-01T00:00:00+02:00`,
+  };
+};
+
+const analyticsEventTime = (row) => row.event_time || row.client_occurred_at || row.occurred_at;
+const addIfPresent = (set, value) => {
+  if (value !== null && value !== undefined && String(value).trim()) set.add(String(value).trim());
+};
+
+const buildMonthlyVisitorJourneys = (rows) => {
+  const journeys = new Map();
+  const timelineEvents = new Set([
+    'page_view', 'category_view', 'product_view', 'image_view', 'section_open',
+    'add_to_cart', 'remove_from_cart', 'begin_checkout', 'checkout_step',
+    'payment_started', 'purchase', 'scroll_depth', 'page_exit',
+  ]);
+
+  for (const row of rows) {
+    let journey = journeys.get(row.visitor_id);
+    if (!journey) {
+      journey = {
+        visitor_id: row.visitor_id,
+        sessionIds: new Set(),
+        pages: new Set(),
+        products: new Set(),
+        addedProducts: new Set(),
+        steps: [],
+        started_at: analyticsEventTime(row),
+        latest_activity: analyticsEventTime(row),
+        source: null,
+        referrer_host: null,
+        google_search_term: null,
+        campaign: null,
+        ad_group: null,
+        browser_name: null,
+        device_type: null,
+        os_name: null,
+        city_name: null,
+        region_name: null,
+        country_code: null,
+        timezone_name: null,
+        scroll_depth: 0,
+        images_viewed: 0,
+        durationFromExit: 0,
+        delivery_opened: false,
+        returns_opened: false,
+        added_to_cart: false,
+        checkout_started: false,
+        payment_started: false,
+        purchased: false,
+        exit_page: null,
+      };
+      journeys.set(row.visitor_id, journey);
+    }
+
+    const eventTime = analyticsEventTime(row);
+    if (eventTime && (!journey.started_at || new Date(eventTime) < new Date(journey.started_at))) journey.started_at = eventTime;
+    if (eventTime && (!journey.latest_activity || new Date(eventTime) > new Date(journey.latest_activity))) journey.latest_activity = eventTime;
+    addIfPresent(journey.sessionIds, row.session_id);
+    if (row.event_name === 'page_view') addIfPresent(journey.pages, row.page_path);
+    if (row.event_name === 'product_view') addIfPresent(journey.products, row.product_name || row.product_id);
+    if (row.event_name === 'add_to_cart') addIfPresent(journey.addedProducts, row.product_name || row.product_id);
+    if (row.event_name === 'product_view') journey.images_viewed += 1;
+    if (row.event_name === 'image_view') journey.images_viewed += 1;
+    if (row.event_name === 'scroll_depth') journey.scroll_depth = Math.max(journey.scroll_depth, Number(row.event_value || 0));
+    if (row.event_name === 'page_exit') {
+      journey.durationFromExit += Math.max(0, Number(row.duration_seconds || 0));
+      journey.exit_page = row.page_path || journey.exit_page;
+    }
+    journey.delivery_opened ||= (
+      row.event_name === 'section_open' && /deliver/i.test(row.page_title || '')
+    ) || (row.event_name === 'page_view' && row.page_path === '/shipping');
+    journey.returns_opened ||= (
+      row.event_name === 'section_open' && /return/i.test(row.page_title || '')
+    ) || (row.event_name === 'page_view' && row.page_path === '/returns');
+    journey.added_to_cart ||= row.event_name === 'add_to_cart';
+    journey.checkout_started ||= ['begin_checkout', 'checkout_step'].includes(row.event_name);
+    journey.payment_started ||= row.event_name === 'payment_started';
+    journey.purchased ||= row.event_name === 'purchase';
+
+    for (const key of [
+      'source', 'referrer_host', 'campaign', 'ad_group', 'browser_name', 'device_type',
+      'os_name', 'city_name', 'region_name', 'country_code', 'timezone_name',
+    ]) {
+      if (!journey[key] && row[key]) journey[key] = row[key];
+    }
+    if (!journey.google_search_term && row.utm_term) journey.google_search_term = row.utm_term;
+
+    if (timelineEvents.has(row.event_name)) {
+      journey.steps.push({
+        eventName: row.event_name,
+        pagePath: row.page_path,
+        pageTitle: row.page_title,
+        productName: row.product_name,
+        eventValue: row.event_value,
+        occurredAt: eventTime,
+      });
+    }
+  }
+
+  return Array.from(journeys.values()).map((journey) => {
+    const elapsed = Math.max(0, Math.round((new Date(journey.latest_activity) - new Date(journey.started_at)) / 1000));
+    journey.steps.sort((a, b) => new Date(a.occurredAt) - new Date(b.occurredAt));
+    return {
+      visitor_id: journey.visitor_id,
+      session_count: journey.sessionIds.size,
+      started_at: journey.started_at,
+      latest_activity: journey.latest_activity,
+      source: journey.source,
+      referrer_host: journey.referrer_host,
+      google_search_term: journey.google_search_term,
+      campaign: journey.campaign,
+      ad_group: journey.ad_group,
+      browser_name: journey.browser_name,
+      device_type: journey.device_type,
+      os_name: journey.os_name,
+      city_name: journey.city_name,
+      region_name: journey.region_name,
+      country_code: journey.country_code,
+      timezone_name: journey.timezone_name,
+      session_duration_seconds: Math.max(elapsed, journey.durationFromExit),
+      pages_viewed: journey.pages.size,
+      products_viewed_count: journey.products.size,
+      products_viewed: Array.from(journey.products),
+      added_products_count: journey.addedProducts.size,
+      added_products: Array.from(journey.addedProducts),
+      scroll_depth: journey.scroll_depth,
+      images_viewed: journey.images_viewed,
+      delivery_opened: journey.delivery_opened,
+      returns_opened: journey.returns_opened,
+      added_to_cart: journey.added_to_cart,
+      checkout_started: journey.checkout_started,
+      payment_started: journey.payment_started,
+      purchased: journey.purchased,
+      exit_page: journey.exit_page,
+      steps: journey.steps,
+    };
+  }).sort((a, b) => new Date(b.latest_activity) - new Date(a.latest_activity));
+};
+
 // Dynamic pricing config (loaded from DB site_config; falls back to ENV/defaults)
 let USD_TO_ZAR = 18.0;
 let PRICE_MARKUP = 1.4;
@@ -1144,7 +1297,7 @@ router.put('/orders/:id', async (req, res) => {
 // customer identity and financial data; orders remain in the existing analytics endpoint.
 router.get('/traffic-insights', async (_req, res) => {
   try {
-    const [summaryResult, sourcesResult, regionsResult, pagesResult, productsResult, hourlyResult, funnelResult, purchasesResult, staffResult, surveyResult, journeysResult] = await Promise.all([
+    const [summaryResult, sourcesResult, regionsResult, pagesResult, productsResult, hourlyResult, funnelResult, purchasesResult, staffResult, surveyResult, journeysResult, botResult] = await Promise.all([
       pool.query(`
         SELECT
           COUNT(DISTINCT visitor_id) AS visitors,
@@ -1154,6 +1307,7 @@ router.get('/traffic-insights', async (_req, res) => {
           COALESCE(ROUND(AVG(duration_seconds) FILTER (WHERE event_name = 'page_exit' AND duration_seconds IS NOT NULL)), 0) AS average_seconds
         FROM storefront_analytics_events
         WHERE traffic_type = 'customer' AND is_internal_traffic = FALSE AND is_duplicate = FALSE
+          AND COALESCE(device_type, '') <> 'Bot'
           AND occurred_at >= NOW() - INTERVAL '30 days'
       `),
       pool.query(`
@@ -1163,6 +1317,7 @@ router.get('/traffic-insights', async (_req, res) => {
           COUNT(DISTINCT session_id) AS sessions
         FROM storefront_analytics_events
         WHERE traffic_type = 'customer' AND is_internal_traffic = FALSE AND is_duplicate = FALSE
+          AND COALESCE(device_type, '') <> 'Bot'
           AND event_name = 'session_start' AND occurred_at >= NOW() - INTERVAL '30 days'
         GROUP BY 1, 2
         ORDER BY sessions DESC
@@ -1177,6 +1332,7 @@ router.get('/traffic-insights', async (_req, res) => {
           MAX(occurred_at) AS latest_visit
         FROM storefront_analytics_events
         WHERE traffic_type = 'customer' AND is_internal_traffic = FALSE AND is_duplicate = FALSE
+          AND COALESCE(device_type, '') <> 'Bot'
           AND event_name = 'session_start'
           AND occurred_at >= NOW() - INTERVAL '30 days'
           AND (country_code IS NOT NULL OR timezone_name IS NOT NULL)
@@ -1188,6 +1344,7 @@ router.get('/traffic-insights', async (_req, res) => {
         SELECT page_path, MAX(page_title) AS page_title, COUNT(*) AS views
         FROM storefront_analytics_events
         WHERE traffic_type = 'customer' AND is_internal_traffic = FALSE AND is_duplicate = FALSE
+          AND COALESCE(device_type, '') <> 'Bot'
           AND event_name = 'page_view' AND occurred_at >= NOW() - INTERVAL '30 days'
         GROUP BY page_path
         ORDER BY views DESC
@@ -1200,6 +1357,7 @@ router.get('/traffic-insights', async (_req, res) => {
                COUNT(*) FILTER (WHERE event_name = 'add_to_cart') AS add_to_cart
         FROM storefront_analytics_events
         WHERE traffic_type = 'customer' AND is_internal_traffic = FALSE AND is_duplicate = FALSE
+          AND COALESCE(device_type, '') <> 'Bot'
           AND event_name IN ('product_view', 'product_click', 'add_to_cart')
           AND product_id IS NOT NULL AND occurred_at >= NOW() - INTERVAL '30 days'
         GROUP BY product_id
@@ -1210,6 +1368,7 @@ router.get('/traffic-insights', async (_req, res) => {
         SELECT EXTRACT(HOUR FROM (occurred_at AT TIME ZONE 'UTC' AT TIME ZONE 'Africa/Johannesburg'))::int AS hour, COUNT(DISTINCT session_id) AS sessions
         FROM storefront_analytics_events
         WHERE traffic_type = 'customer' AND is_internal_traffic = FALSE AND is_duplicate = FALSE
+          AND COALESCE(device_type, '') <> 'Bot'
           AND occurred_at >= NOW() - INTERVAL '30 days'
         GROUP BY 1
         ORDER BY sessions DESC, hour ASC
@@ -1224,6 +1383,7 @@ router.get('/traffic-insights', async (_req, res) => {
           COUNT(DISTINCT session_id) FILTER (WHERE event_name = 'payment_started') AS payment_sessions
         FROM storefront_analytics_events
         WHERE traffic_type = 'customer' AND is_internal_traffic = FALSE AND is_duplicate = FALSE
+          AND COALESCE(device_type, '') <> 'Bot'
           AND occurred_at >= NOW() - INTERVAL '30 days'
       `),
       pool.query(`
@@ -1267,7 +1427,9 @@ router.get('/traffic-insights', async (_req, res) => {
         WHERE traffic_type = 'customer'
           AND is_internal_traffic = FALSE
           AND is_duplicate = FALSE
+          AND COALESCE(device_type, '') <> 'Bot'
           AND event_name = 'survey_response'
+          AND product_category = 'shopping_feedback_v2'
           AND occurred_at >= NOW() - INTERVAL '30 days'
           AND product_id IS NOT NULL
           AND product_name IS NOT NULL
@@ -1287,6 +1449,7 @@ router.get('/traffic-insights', async (_req, res) => {
           WHERE traffic_type = 'customer'
             AND is_internal_traffic = FALSE
             AND is_duplicate = FALSE
+            AND COALESCE(device_type, '') <> 'Bot'
             AND occurred_at >= NOW() - INTERVAL '90 days'
         ),
         session_rollup AS (
@@ -1453,6 +1616,7 @@ router.get('/traffic-insights', async (_req, res) => {
               AND earlier.traffic_type = 'customer'
               AND earlier.is_internal_traffic = FALSE
               AND earlier.is_duplicate = FALSE
+              AND COALESCE(earlier.device_type, '') <> 'Bot'
           ) AS is_returning,
           (
             SELECT JSON_AGG(
@@ -1493,6 +1657,17 @@ router.get('/traffic-insights', async (_req, res) => {
         FROM visit_rollup AS rollup
         ORDER BY rollup.latest_activity DESC
         LIMIT 20
+      `),
+      pool.query(`
+        SELECT
+          COUNT(DISTINCT visitor_id) AS visitors,
+          COUNT(DISTINCT session_id) AS sessions,
+          COUNT(*) AS events
+        FROM storefront_analytics_events
+        WHERE is_internal_traffic = FALSE
+          AND is_duplicate = FALSE
+          AND (traffic_type = 'bot' OR device_type = 'Bot')
+          AND occurred_at >= NOW() - INTERVAL '30 days'
       `),
     ]);
 
@@ -1543,11 +1718,103 @@ router.get('/traffic-insights', async (_req, res) => {
       staffActivity: staffResult.rows,
       surveyFeedback,
       journeys: journeysResult.rows,
+      botSummary: botResult.rows[0] || { visitors: 0, sessions: 0, events: 0 },
       timeZone: 'Africa/Johannesburg',
     });
   } catch (error) {
     console.error('Traffic insights error:', error.message);
     res.status(500).json({ error: 'Unable to load traffic insights' });
+  }
+});
+
+// Full calendar-month export. Customer journeys are anonymous and combined by
+// visitor across tabs/sessions. Bots are intentionally returned only as totals.
+router.get('/traffic-insights/export', async (req, res) => {
+  const window = analyticsMonthWindow(req.query.month);
+  if (!window) return res.status(400).json({ error: 'Month must use YYYY-MM format' });
+
+  try {
+    const [eventsResult, botResult] = await Promise.all([
+      pool.query(`
+        SELECT
+          event_name, session_id, visitor_id, page_path, page_title,
+          product_id, product_name, source, referrer_host, utm_term,
+          campaign, ad_group, browser_name, device_type, os_name,
+          city_name, region_name, country_code, timezone_name,
+          event_value, duration_seconds, client_occurred_at, occurred_at,
+          COALESCE(client_occurred_at, occurred_at AT TIME ZONE 'UTC') AS event_time
+        FROM storefront_analytics_events
+        WHERE traffic_type = 'customer'
+          AND is_internal_traffic = FALSE
+          AND is_duplicate = FALSE
+          AND COALESCE(device_type, '') <> 'Bot'
+          AND occurred_at >= ($1::timestamptz AT TIME ZONE 'UTC')
+          AND occurred_at < ($2::timestamptz AT TIME ZONE 'UTC')
+        ORDER BY visitor_id, event_time, event_sequence NULLS LAST, occurred_at
+        LIMIT 100000
+      `, [window.start, window.end]),
+      pool.query(`
+        SELECT
+          COUNT(DISTINCT visitor_id) AS visitors,
+          COUNT(DISTINCT session_id) AS sessions,
+          COUNT(*) AS events
+        FROM storefront_analytics_events
+        WHERE is_internal_traffic = FALSE
+          AND is_duplicate = FALSE
+          AND (traffic_type = 'bot' OR device_type = 'Bot')
+          AND occurred_at >= ($1::timestamptz AT TIME ZONE 'UTC')
+          AND occurred_at < ($2::timestamptz AT TIME ZONE 'UTC')
+      `, [window.start, window.end]),
+    ]);
+
+    const journeys = buildMonthlyVisitorJourneys(eventsResult.rows);
+    const sessionIds = new Set(eventsResult.rows.map((row) => row.session_id));
+    const eventCount = (name) => eventsResult.rows.filter((row) => row.event_name === name).length;
+    const distinctSessionsWith = (names) => {
+      const allowed = new Set(names);
+      return new Set(eventsResult.rows.filter((row) => allowed.has(row.event_name)).map((row) => row.session_id)).size;
+    };
+    const similarExamples = journeys.filter((journey) => (
+      journey.added_products_count >= 3 && !journey.purchased
+    ));
+
+    return res.json({
+      period: {
+        month: window.month,
+        label: new Intl.DateTimeFormat('en-ZA', { month: 'long', year: 'numeric', timeZone: 'Africa/Johannesburg' }).format(new Date(window.start)),
+        start: window.start,
+        end: window.end,
+      },
+      summary: {
+        visitors: journeys.length,
+        sessions: sessionIds.size,
+        events: eventsResult.rows.length,
+        pageViews: eventCount('page_view'),
+        productViews: eventCount('product_view'),
+        addToCartActions: eventCount('add_to_cart'),
+        checkoutSessions: distinctSessionsWith(['begin_checkout', 'checkout_step']),
+        paymentSessions: distinctSessionsWith(['payment_started']),
+        purchases: distinctSessionsWith(['purchase']),
+      },
+      botSummary: botResult.rows[0] || { visitors: 0, sessions: 0, events: 0 },
+      similarBehavior: {
+        label: 'Added 3 or more different products without completing a purchase',
+        visitors: similarExamples.length,
+        examples: similarExamples.slice(0, 12).map((journey) => ({
+          visitor_id: journey.visitor_id,
+          latest_activity: journey.latest_activity,
+          added_products: journey.added_products,
+          checkout_started: journey.checkout_started,
+          source: journey.source || journey.referrer_host || 'Direct',
+        })),
+      },
+      journeys,
+      truncated: eventsResult.rows.length >= 100000,
+      timeZone: 'Africa/Johannesburg',
+    });
+  } catch (error) {
+    console.error('Monthly traffic export error:', error.message);
+    return res.status(500).json({ error: 'Unable to prepare the monthly analytics report' });
   }
 });
 
