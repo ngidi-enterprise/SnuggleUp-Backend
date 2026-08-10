@@ -1144,7 +1144,7 @@ router.put('/orders/:id', async (req, res) => {
 // customer identity and financial data; orders remain in the existing analytics endpoint.
 router.get('/traffic-insights', async (_req, res) => {
   try {
-    const [summaryResult, sourcesResult, regionsResult, pagesResult, productsResult, hourlyResult, funnelResult, purchasesResult, staffResult, journeysResult] = await Promise.all([
+    const [summaryResult, sourcesResult, regionsResult, pagesResult, productsResult, hourlyResult, funnelResult, purchasesResult, staffResult, surveyResult, journeysResult] = await Promise.all([
       pool.query(`
         SELECT
           COUNT(DISTINCT visitor_id) AS visitors,
@@ -1200,6 +1200,7 @@ router.get('/traffic-insights', async (_req, res) => {
                COUNT(*) FILTER (WHERE event_name = 'add_to_cart') AS add_to_cart
         FROM storefront_analytics_events
         WHERE traffic_type = 'customer' AND is_internal_traffic = FALSE AND is_duplicate = FALSE
+          AND event_name IN ('product_view', 'product_click', 'add_to_cart')
           AND product_id IS NOT NULL AND occurred_at >= NOW() - INTERVAL '30 days'
         GROUP BY product_id
         ORDER BY views DESC, clicks DESC
@@ -1255,6 +1256,23 @@ router.get('/traffic-insights', async (_req, res) => {
           AND occurred_at >= NOW() - INTERVAL '30 days'
         GROUP BY audience_type
         ORDER BY audience_type
+      `),
+      pool.query(`
+        SELECT
+          product_id AS question_key,
+          MAX(page_title) AS question,
+          product_name AS answer,
+          COUNT(DISTINCT visitor_id) AS responses
+        FROM storefront_analytics_events
+        WHERE traffic_type = 'customer'
+          AND is_internal_traffic = FALSE
+          AND is_duplicate = FALSE
+          AND event_name = 'survey_response'
+          AND occurred_at >= NOW() - INTERVAL '30 days'
+          AND product_id IS NOT NULL
+          AND product_name IS NOT NULL
+        GROUP BY product_id, product_name
+        ORDER BY product_id, responses DESC
       `),
       pool.query(`
         WITH clean_events AS (
@@ -1325,14 +1343,112 @@ router.get('/traffic-insights', async (_req, res) => {
           FROM clean_events
           WHERE occurred_at >= NOW() - INTERVAL '7 days'
           GROUP BY session_id
+        ),
+        ordered_sessions AS (
+          SELECT
+            rollup.*,
+            MAX(latest_activity) OVER (
+              PARTITION BY visitor_id
+              ORDER BY started_at, session_id
+              ROWS BETWEEN UNBOUNDED PRECEDING AND 1 PRECEDING
+            ) AS prior_latest_activity
+          FROM session_rollup AS rollup
+        ),
+        numbered_sessions AS (
+          SELECT
+            ordered.*,
+            SUM(
+              CASE
+                WHEN prior_latest_activity IS NULL
+                  OR started_at > prior_latest_activity + INTERVAL '30 minutes'
+                THEN 1
+                ELSE 0
+              END
+            ) OVER (
+              PARTITION BY visitor_id
+              ORDER BY started_at, session_id
+              ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
+            ) AS visit_number
+          FROM ordered_sessions AS ordered
+        ),
+        visit_rollup AS (
+          SELECT
+            visitor_id,
+            visit_number,
+            ARRAY_AGG(session_id ORDER BY started_at) AS session_ids,
+            COUNT(*)::int AS session_count,
+            MIN(started_at) AS started_at,
+            MAX(latest_activity) AS latest_activity,
+            (ARRAY_AGG(source ORDER BY latest_activity DESC) FILTER (WHERE source IS NOT NULL))[1] AS source,
+            (ARRAY_AGG(referrer_host ORDER BY latest_activity DESC) FILTER (WHERE referrer_host IS NOT NULL))[1] AS referrer_host,
+            (ARRAY_AGG(google_search_term ORDER BY latest_activity DESC) FILTER (WHERE google_search_term IS NOT NULL))[1] AS google_search_term,
+            (ARRAY_AGG(campaign ORDER BY latest_activity DESC) FILTER (WHERE campaign IS NOT NULL))[1] AS campaign,
+            (ARRAY_AGG(ad_group ORDER BY latest_activity DESC) FILTER (WHERE ad_group IS NOT NULL))[1] AS ad_group,
+            (ARRAY_AGG(gclid ORDER BY latest_activity DESC) FILTER (WHERE gclid IS NOT NULL))[1] AS gclid,
+            (ARRAY_AGG(browser_name ORDER BY latest_activity DESC) FILTER (WHERE browser_name IS NOT NULL))[1] AS browser_name,
+            (ARRAY_AGG(device_type ORDER BY latest_activity DESC) FILTER (WHERE device_type IS NOT NULL))[1] AS device_type,
+            (ARRAY_AGG(os_name ORDER BY latest_activity DESC) FILTER (WHERE os_name IS NOT NULL))[1] AS os_name,
+            (ARRAY_AGG(city_name ORDER BY latest_activity DESC) FILTER (WHERE city_name IS NOT NULL))[1] AS city_name,
+            (ARRAY_AGG(region_name ORDER BY latest_activity DESC) FILTER (WHERE region_name IS NOT NULL))[1] AS region_name,
+            (ARRAY_AGG(country_code ORDER BY latest_activity DESC) FILTER (WHERE country_code IS NOT NULL))[1] AS country_code,
+            (ARRAY_AGG(timezone_name ORDER BY latest_activity DESC) FILTER (WHERE timezone_name IS NOT NULL))[1] AS timezone_name,
+            GREATEST(
+              EXTRACT(EPOCH FROM MAX(latest_activity) - MIN(started_at))::int,
+              MAX(session_duration_seconds)
+            ) AS session_duration_seconds,
+            BOOL_OR(delivery_opened) AS delivery_opened,
+            BOOL_OR(returns_opened) AS returns_opened,
+            BOOL_OR(added_to_cart) AS added_to_cart,
+            BOOL_OR(checkout_started) AS checkout_started,
+            BOOL_OR(purchased) AS purchased,
+            (ARRAY_AGG(exit_page ORDER BY latest_activity DESC) FILTER (WHERE exit_page IS NOT NULL))[1] AS exit_page
+          FROM numbered_sessions
+          GROUP BY visitor_id, visit_number
         )
         SELECT
           rollup.*,
+          rollup.session_ids[1] AS session_id,
+          CONCAT(rollup.visitor_id, '-', rollup.visit_number) AS journey_id,
+          (
+            SELECT COUNT(DISTINCT step.page_path)
+            FROM clean_events AS step
+            WHERE step.session_id = ANY(rollup.session_ids)
+              AND step.event_name = 'page_view'
+          ) AS pages_viewed,
+          (
+            SELECT COUNT(DISTINCT step.product_id)
+            FROM clean_events AS step
+            WHERE step.session_id = ANY(rollup.session_ids)
+              AND step.event_name = 'product_view'
+          ) AS products_viewed_count,
+          COALESCE((
+            SELECT ARRAY_AGG(product.product_name ORDER BY product.product_name)
+            FROM (
+              SELECT DISTINCT step.product_name
+              FROM clean_events AS step
+              WHERE step.session_id = ANY(rollup.session_ids)
+                AND step.event_name = 'product_view'
+                AND step.product_name IS NOT NULL
+            ) AS product
+          ), ARRAY[]::text[]) AS products_viewed,
+          COALESCE((
+            SELECT MAX(step.event_value)
+            FROM clean_events AS step
+            WHERE step.session_id = ANY(rollup.session_ids)
+              AND step.event_name = 'scroll_depth'
+          ), 0) AS scroll_depth,
+          (
+            SELECT
+              COUNT(DISTINCT step.product_id) FILTER (WHERE step.event_name = 'product_view')
+              + COUNT(*) FILTER (WHERE step.event_name = 'image_view')
+            FROM clean_events AS step
+            WHERE step.session_id = ANY(rollup.session_ids)
+          ) AS images_viewed,
           EXISTS (
             SELECT 1
             FROM storefront_analytics_events AS earlier
             WHERE earlier.visitor_id = rollup.visitor_id
-              AND earlier.session_id <> rollup.session_id
+              AND NOT (earlier.session_id = ANY(rollup.session_ids))
               AND (earlier.occurred_at AT TIME ZONE 'UTC') < rollup.started_at
               AND earlier.traffic_type = 'customer'
               AND earlier.is_internal_traffic = FALSE
@@ -1366,7 +1482,7 @@ router.get('/traffic-insights', async (_req, res) => {
                 step.occurred_at
             )
             FROM clean_events AS step
-            WHERE step.session_id = rollup.session_id
+            WHERE step.session_id = ANY(rollup.session_ids)
               AND step.event_name IN (
                 'page_view', 'category_view', 'product_view', 'image_view',
                 'section_open', 'add_to_cart', 'remove_from_cart',
@@ -1374,13 +1490,30 @@ router.get('/traffic-insights', async (_req, res) => {
                 'purchase', 'scroll_depth', 'page_exit'
               )
           ) AS steps
-        FROM session_rollup AS rollup
+        FROM visit_rollup AS rollup
         ORDER BY rollup.latest_activity DESC
         LIMIT 20
       `),
     ]);
 
     const funnelRow = funnelResult.rows[0] || {};
+    const surveyFeedback = Object.values(surveyResult.rows.reduce((groups, row) => {
+      const key = row.question_key;
+      if (!groups[key]) {
+        groups[key] = { key, question: row.question, total: 0, answers: [] };
+      }
+      const responses = Number(row.responses || 0);
+      groups[key].total += responses;
+      groups[key].answers.push({ answer: row.answer, responses });
+      return groups;
+    }, {})).map((group) => ({
+      ...group,
+      answers: group.answers.map((answer) => ({
+        ...answer,
+        percent: group.total > 0 ? Math.round((answer.responses / group.total) * 100) : 0,
+      })),
+    }));
+
     const funnel = [
       { key: 'visitors', label: 'Store visits', value: Number(funnelRow.visitors || 0) },
       { key: 'product_viewers', label: 'Viewed a product', value: Number(funnelRow.product_viewers || 0) },
@@ -1408,6 +1541,7 @@ router.get('/traffic-insights', async (_req, res) => {
       popularHours: hourlyResult.rows,
       funnel,
       staffActivity: staffResult.rows,
+      surveyFeedback,
       journeys: journeysResult.rows,
       timeZone: 'Africa/Johannesburg',
     });

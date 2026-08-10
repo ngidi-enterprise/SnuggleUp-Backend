@@ -25,6 +25,7 @@ const ALLOWED_EVENTS = new Set([
   'checkout_step', 'payment_started', 'payment_attempt', 'purchase',
   'form_submission', 'button_click', 'outbound_click', 'error',
   'scroll_depth', 'search', 'image_view', 'section_open',
+  'survey_response',
 ]);
 const cleanText = (value, maxLength = 160) => String(value || '').trim().slice(0, maxLength);
 const cleanPath = (value) => {
