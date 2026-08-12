@@ -6,6 +6,7 @@ import { createOrder, updateOrderStatus, getOrderByNumber } from './orders.js';
 import { sendBrandedOrderConfirmationEmail } from '../services/orderConfirmationEmail.js';
 import { notifyOwnerOfNewOrder } from '../services/ownerOrderNotifications.js';
 import { calculateBundleDiscount } from '../config/localBundles.js';
+import { recordCheckoutOutcome } from '../services/checkoutAnalytics.js';
 
 export const router = express.Router();
 
@@ -169,7 +170,9 @@ router.post('/create', optionalAuth, async (req, res) => {
       shippingCountry,
       insurance,
       shippingDetails,
-      bundleSelections
+      bundleSelections,
+      analyticsVisitorId,
+      analyticsSessionId
     } = req.body;
     
     console.log('💰 Creating PayFast payment:', { 
@@ -393,7 +396,9 @@ router.post('/create', optionalAuth, async (req, res) => {
           shippingCountry,
           shippingMethod: localShippingMethod || 'Standard delivery - R99',
           insurance: { selected: false, cost: 0, coverage: 0 },
-          shippingDetails: safeShippingDetails
+          shippingDetails: safeShippingDetails,
+          analyticsVisitorId,
+          analyticsSessionId
         });
         console.log('✅ Local order created:', localOrderNumber);
       }
@@ -411,7 +416,9 @@ router.post('/create', optionalAuth, async (req, res) => {
           shippingCountry,
           shippingMethod,
           insurance,
-          shippingDetails: safeShippingDetails
+          shippingDetails: safeShippingDetails,
+          analyticsVisitorId,
+          analyticsSessionId
         });
         console.log('✅ Import order created:', importOrderNumber);
       }
@@ -425,8 +432,8 @@ router.post('/create', optionalAuth, async (req, res) => {
     const data = {
       merchant_id: merchantId,
       merchant_key: merchantKey,
-      return_url: `${backendUrl}/api/payments/success`,
-      cancel_url: `${backendUrl}/api/payments/cancel`,
+      return_url: `${backendUrl}/api/payments/success?order=${encodeURIComponent(orderNumber)}`,
+      cancel_url: `${backendUrl}/api/payments/cancel?order=${encodeURIComponent(orderNumber)}`,
       notify_url: `${backendUrl}/api/payments/notify`,
       name_first: (req.user?.name || req.user?.email?.split('@')[0] || 'Customer').toString().slice(0, 60),
       email_address: checkoutEmail,
@@ -560,6 +567,11 @@ router.post('/test-signature', async (req, res) => {
 // Handle PayFast success redirect
 router.get('/success', async (req, res) => {
   const frontendUrl = process.env.FRONTEND_URL || 'https://snuggleup.co.za';
+  const suppliedOrder = String(req.query?.order || '').trim();
+  if (suppliedOrder) {
+    const params = new URLSearchParams({ m_payment_id: suppliedOrder });
+    return res.redirect(`${frontendUrl}/#/checkout/success?${params.toString()}`);
+  }
   
   // PayFast doesn't send params to return_url, so we get the most recent order for this session
   // The user just completed payment, so fetch their latest pending/paid order
@@ -662,6 +674,10 @@ router.post('/notify', async (req, res) => {
           shipping_postal_code,
           shipping_phone,
           shipping_method,
+          subtotal,
+          shipping,
+          analytics_visitor_id,
+          analytics_session_id,
           sent_confirmation,
           owner_order_email_sent,
           owner_order_sms_sent
@@ -743,9 +759,19 @@ router.post('/notify', async (req, res) => {
             });
           }
         }
+        await recordCheckoutOutcome({ eventName: 'payment_success', orders: matching, orderReference: orderNumber });
+        await recordCheckoutOutcome({ eventName: 'purchase_complete', orders: matching, orderReference: orderNumber });
       } else if (paymentStatus === 'FAILED' || paymentStatus === 'PENDING') {
         for (const ord of matching) {
           await updateOrderStatus(ord.order_number, paymentStatus === 'FAILED' ? 'failed' : 'pending', payfastPaymentId);
+        }
+        if (paymentStatus === 'FAILED') {
+          await recordCheckoutOutcome({
+            eventName: 'payment_failed',
+            orders: matching,
+            orderReference: orderNumber,
+            failureReason: 'PayFast reported that payment failed',
+          });
         }
       }
     } else {

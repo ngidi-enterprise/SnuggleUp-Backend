@@ -253,7 +253,9 @@ export const createOrder = async (userId, orderData) => {
       shippingCountry,
       shippingMethod,
       insurance,
-      shippingDetails
+      shippingDetails,
+      analyticsVisitorId,
+      analyticsSessionId
     } = orderData;
     
     console.log('🔍 createOrder called with:', {
@@ -290,9 +292,10 @@ export const createOrder = async (userId, orderData) => {
         user_id, order_number, items, subtotal, shipping, discount, total, customer_email, 
         shipping_country, shipping_method, insurance_selected, insurance_cost, insurance_coverage, 
         customer_name, shipping_address, shipping_city, shipping_province, shipping_postal_code, shipping_phone,
-        shipping_id_number, sms_tracking_opt_in, sms_tracking_phone, supplier_pickup_token, supplier_pickup_status, status
+        shipping_id_number, sms_tracking_opt_in, sms_tracking_phone, supplier_pickup_token, supplier_pickup_status, status,
+        analytics_visitor_id, analytics_session_id
       )
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25) RETURNING id`,
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27) RETURNING id`,
       [
         safeUserId,
         orderNumber,
@@ -318,7 +321,9 @@ export const createOrder = async (userId, orderData) => {
         smsTrackingPhone,
         supplierPickupToken,
         'waiting',
-        'pending'
+        'pending',
+        String(analyticsVisitorId || '').slice(0, 96) || null,
+        String(analyticsSessionId || '').slice(0, 96) || null
       ]
     );
     return result.rows[0].id;

@@ -62,8 +62,13 @@ const buildMonthlyVisitorJourneys = (rows) => {
   const journeys = new Map();
   const timelineEvents = new Set([
     'page_view', 'category_view', 'product_view', 'image_view', 'section_open',
-    'add_to_cart', 'remove_from_cart', 'begin_checkout', 'checkout_step',
-    'payment_started', 'purchase', 'scroll_depth', 'page_exit',
+    'add_to_cart', 'cart_opened', 'cart_item_removed', 'remove_from_cart',
+    'quantity_changed', 'checkout_clicked', 'begin_checkout', 'checkout_loaded',
+    'checkout_step', 'delivery_location_entered', 'delivery_quote_shown',
+    'delivery_option_selected', 'customer_details_started',
+    'customer_details_completed', 'payment_clicked', 'payment_started',
+    'payfast_redirected', 'payment_success', 'payment_failed',
+    'purchase_complete', 'purchase', 'scroll_depth', 'page_exit',
   ]);
 
   for (const row of rows) {
@@ -88,6 +93,8 @@ const buildMonthlyVisitorJourneys = (rows) => {
         os_name: null,
         city_name: null,
         region_name: null,
+        province_name: null,
+        municipality_name: null,
         country_code: null,
         timezone_name: null,
         scroll_depth: 0,
@@ -125,13 +132,14 @@ const buildMonthlyVisitorJourneys = (rows) => {
       row.event_name === 'section_open' && /return/i.test(row.page_title || '')
     ) || (row.event_name === 'page_view' && row.page_path === '/returns');
     journey.added_to_cart ||= row.event_name === 'add_to_cart';
-    journey.checkout_started ||= ['begin_checkout', 'checkout_step'].includes(row.event_name);
-    journey.payment_started ||= row.event_name === 'payment_started';
-    journey.purchased ||= row.event_name === 'purchase';
+    journey.checkout_started ||= ['checkout_clicked', 'checkout_loaded', 'begin_checkout', 'checkout_step'].includes(row.event_name);
+    journey.payment_started ||= ['payment_clicked', 'payfast_redirected', 'payment_started'].includes(row.event_name);
+    journey.purchased ||= ['payment_success', 'purchase_complete', 'purchase'].includes(row.event_name);
 
     for (const key of [
       'source', 'referrer_host', 'campaign', 'ad_group', 'browser_name', 'device_type',
-      'os_name', 'city_name', 'region_name', 'country_code', 'timezone_name',
+      'os_name', 'city_name', 'region_name', 'province_name', 'municipality_name',
+      'country_code', 'timezone_name',
     ]) {
       if (!journey[key] && row[key]) journey[key] = row[key];
     }
@@ -144,6 +152,12 @@ const buildMonthlyVisitorJourneys = (rows) => {
         pageTitle: row.page_title,
         productName: row.product_name,
         eventValue: row.event_value,
+        cartItems: row.cart_items,
+        cartValue: row.cart_value,
+        deliveryCost: row.delivery_cost,
+        deliveryOption: row.delivery_option,
+        orderReference: row.order_reference,
+        failureReason: row.failure_reason,
         occurredAt: eventTime,
       });
     }
@@ -167,6 +181,8 @@ const buildMonthlyVisitorJourneys = (rows) => {
       os_name: journey.os_name,
       city_name: journey.city_name,
       region_name: journey.region_name,
+      province_name: journey.province_name || journey.region_name,
+      municipality_name: journey.municipality_name || journey.city_name,
       country_code: journey.country_code,
       timezone_name: journey.timezone_name,
       session_duration_seconds: Math.max(elapsed, journey.durationFromExit),
@@ -1327,6 +1343,8 @@ router.get('/traffic-insights', async (_req, res) => {
         SELECT
           country_code,
           timezone_name,
+          COALESCE(province_name, region_name) AS province_name,
+          COALESCE(municipality_name, city_name) AS municipality_name,
           MAX(browser_locale) AS browser_locale,
           COUNT(DISTINCT session_id) AS sessions,
           MAX(occurred_at) AS latest_visit
@@ -1335,8 +1353,14 @@ router.get('/traffic-insights', async (_req, res) => {
           AND COALESCE(device_type, '') <> 'Bot'
           AND event_name = 'session_start'
           AND occurred_at >= NOW() - INTERVAL '30 days'
-          AND (country_code IS NOT NULL OR timezone_name IS NOT NULL)
-        GROUP BY country_code, timezone_name
+          AND (
+            country_code IS NOT NULL OR timezone_name IS NOT NULL
+            OR province_name IS NOT NULL OR region_name IS NOT NULL
+            OR municipality_name IS NOT NULL OR city_name IS NOT NULL
+          )
+        GROUP BY country_code, timezone_name,
+                 COALESCE(province_name, region_name),
+                 COALESCE(municipality_name, city_name)
         ORDER BY sessions DESC
         LIMIT 12
       `),
@@ -1379,8 +1403,18 @@ router.get('/traffic-insights', async (_req, res) => {
           COUNT(DISTINCT session_id) FILTER (WHERE event_name = 'session_start') AS visitors,
           COUNT(DISTINCT session_id) FILTER (WHERE event_name = 'product_view') AS product_viewers,
           COUNT(DISTINCT session_id) FILTER (WHERE event_name = 'add_to_cart') AS cart_sessions,
-          COUNT(DISTINCT session_id) FILTER (WHERE event_name = 'begin_checkout') AS checkout_sessions,
-          COUNT(DISTINCT session_id) FILTER (WHERE event_name = 'payment_started') AS payment_sessions
+          COUNT(DISTINCT session_id) FILTER (WHERE event_name = 'cart_opened') AS cart_opened_sessions,
+          COUNT(DISTINCT session_id) FILTER (WHERE event_name IN ('checkout_clicked', 'begin_checkout')) AS checkout_clicked_sessions,
+          COUNT(DISTINCT session_id) FILTER (WHERE event_name = 'checkout_loaded') AS checkout_loaded_sessions,
+          COUNT(DISTINCT session_id) FILTER (WHERE event_name = 'delivery_location_entered') AS delivery_location_sessions,
+          COUNT(DISTINCT session_id) FILTER (WHERE event_name = 'delivery_quote_shown') AS delivery_quote_sessions,
+          COUNT(DISTINCT session_id) FILTER (WHERE event_name = 'delivery_option_selected') AS delivery_selected_sessions,
+          COUNT(DISTINCT session_id) FILTER (WHERE event_name = 'customer_details_started') AS details_started_sessions,
+          COUNT(DISTINCT session_id) FILTER (WHERE event_name = 'customer_details_completed') AS details_completed_sessions,
+          COUNT(DISTINCT session_id) FILTER (WHERE event_name = 'payment_clicked') AS payment_clicked_sessions,
+          COUNT(DISTINCT session_id) FILTER (WHERE event_name IN ('payfast_redirected', 'payment_started')) AS payfast_sessions,
+          COUNT(DISTINCT session_id) FILTER (WHERE event_name = 'payment_success') AS payment_success_sessions,
+          COUNT(DISTINCT session_id) FILTER (WHERE event_name IN ('purchase_complete', 'purchase')) AS purchase_sessions
         FROM storefront_analytics_events
         WHERE traffic_type = 'customer' AND is_internal_traffic = FALSE AND is_duplicate = FALSE
           AND COALESCE(device_type, '') <> 'Bot'
@@ -1469,6 +1503,8 @@ router.get('/traffic-insights', async (_req, res) => {
             MAX(NULLIF(os_name, '')) AS os_name,
             MAX(NULLIF(city_name, '')) AS city_name,
             MAX(NULLIF(region_name, '')) AS region_name,
+            MAX(NULLIF(COALESCE(province_name, region_name), '')) AS province_name,
+            MAX(NULLIF(COALESCE(municipality_name, city_name), '')) AS municipality_name,
             MAX(country_code) AS country_code,
             MAX(timezone_name) AS timezone_name,
             GREATEST(
@@ -1497,8 +1533,8 @@ router.get('/traffic-insights', async (_req, res) => {
               OR event_name = 'page_view' AND page_path = '/returns'
             ) AS returns_opened,
             BOOL_OR(event_name = 'add_to_cart') AS added_to_cart,
-            BOOL_OR(event_name IN ('begin_checkout', 'checkout_step')) AS checkout_started,
-            BOOL_OR(event_name = 'purchase') AS purchased,
+            BOOL_OR(event_name IN ('checkout_clicked', 'checkout_loaded', 'begin_checkout', 'checkout_step')) AS checkout_started,
+            BOOL_OR(event_name IN ('purchase_complete', 'purchase')) AS purchased,
             COALESCE(
               (ARRAY_AGG(page_path ORDER BY event_time DESC, event_sequence DESC NULLS LAST) FILTER (WHERE event_name = 'page_exit'))[1],
               (ARRAY_AGG(page_path ORDER BY event_time DESC, event_sequence DESC NULLS LAST))[1]
@@ -1553,6 +1589,8 @@ router.get('/traffic-insights', async (_req, res) => {
             (ARRAY_AGG(os_name ORDER BY latest_activity DESC) FILTER (WHERE os_name IS NOT NULL))[1] AS os_name,
             (ARRAY_AGG(city_name ORDER BY latest_activity DESC) FILTER (WHERE city_name IS NOT NULL))[1] AS city_name,
             (ARRAY_AGG(region_name ORDER BY latest_activity DESC) FILTER (WHERE region_name IS NOT NULL))[1] AS region_name,
+            (ARRAY_AGG(province_name ORDER BY latest_activity DESC) FILTER (WHERE province_name IS NOT NULL))[1] AS province_name,
+            (ARRAY_AGG(municipality_name ORDER BY latest_activity DESC) FILTER (WHERE municipality_name IS NOT NULL))[1] AS municipality_name,
             (ARRAY_AGG(country_code ORDER BY latest_activity DESC) FILTER (WHERE country_code IS NOT NULL))[1] AS country_code,
             (ARRAY_AGG(timezone_name ORDER BY latest_activity DESC) FILTER (WHERE timezone_name IS NOT NULL))[1] AS timezone_name,
             GREATEST(
@@ -1626,6 +1664,12 @@ router.get('/traffic-insights', async (_req, res) => {
                 'pageTitle', step.page_title,
                 'productName', step.product_name,
                 'eventValue', step.event_value,
+                'cartItems', step.cart_items,
+                'cartValue', step.cart_value,
+                'deliveryCost', step.delivery_cost,
+                'deliveryOption', step.delivery_option,
+                'orderReference', step.order_reference,
+                'failureReason', step.failure_reason,
                 'occurredAt', step.event_time
               ) ORDER BY
                 CASE
@@ -1651,7 +1695,13 @@ router.get('/traffic-insights', async (_req, res) => {
                 'page_view', 'category_view', 'product_view', 'image_view',
                 'section_open', 'add_to_cart', 'remove_from_cart',
                 'begin_checkout', 'checkout_step', 'payment_started',
-                'purchase', 'scroll_depth', 'page_exit'
+                'purchase', 'scroll_depth', 'page_exit', 'cart_opened',
+                'cart_item_removed', 'quantity_changed', 'checkout_clicked',
+                'checkout_loaded', 'delivery_location_entered',
+                'delivery_quote_shown', 'delivery_option_selected',
+                'customer_details_started', 'customer_details_completed',
+                'payment_clicked', 'payfast_redirected', 'payment_success',
+                'payment_failed', 'purchase_complete'
               )
           ) AS steps
         FROM visit_rollup AS rollup
@@ -1693,9 +1743,18 @@ router.get('/traffic-insights', async (_req, res) => {
       { key: 'visitors', label: 'Store visits', value: Number(funnelRow.visitors || 0) },
       { key: 'product_viewers', label: 'Viewed a product', value: Number(funnelRow.product_viewers || 0) },
       { key: 'cart_sessions', label: 'Added to cart', value: Number(funnelRow.cart_sessions || 0) },
-      { key: 'checkout_sessions', label: 'Started checkout', value: Number(funnelRow.checkout_sessions || 0) },
-      { key: 'payment_sessions', label: 'Opened PayFast', value: Number(funnelRow.payment_sessions || 0) },
-      { key: 'purchases', label: 'Purchased', value: Number(purchasesResult.rows[0]?.purchases || 0), verified: true },
+      { key: 'cart_opened_sessions', label: 'Opened cart', value: Number(funnelRow.cart_opened_sessions || 0) },
+      { key: 'checkout_clicked_sessions', label: 'Clicked checkout', value: Number(funnelRow.checkout_clicked_sessions || 0) },
+      { key: 'checkout_loaded_sessions', label: 'Checkout loaded', value: Number(funnelRow.checkout_loaded_sessions || 0) },
+      { key: 'delivery_location_sessions', label: 'Entered delivery location', value: Number(funnelRow.delivery_location_sessions || 0) },
+      { key: 'delivery_quote_sessions', label: 'Saw delivery quote', value: Number(funnelRow.delivery_quote_sessions || 0) },
+      { key: 'delivery_selected_sessions', label: 'Selected delivery option', value: Number(funnelRow.delivery_selected_sessions || 0) },
+      { key: 'details_started_sessions', label: 'Started customer details', value: Number(funnelRow.details_started_sessions || 0) },
+      { key: 'details_completed_sessions', label: 'Completed customer details', value: Number(funnelRow.details_completed_sessions || 0) },
+      { key: 'payment_clicked_sessions', label: 'Clicked payment', value: Number(funnelRow.payment_clicked_sessions || 0) },
+      { key: 'payfast_sessions', label: 'Reached PayFast', value: Number(funnelRow.payfast_sessions || 0) },
+      { key: 'payment_success_sessions', label: 'Payment succeeded', value: Number(funnelRow.payment_success_sessions || 0) },
+      { key: 'purchases', label: 'Purchase completed', value: Math.max(Number(funnelRow.purchase_sessions || 0), Number(purchasesResult.rows[0]?.purchases || 0)), verified: true },
     ].map((stage, index, stages) => {
       const previous = index > 0 ? stages[index - 1].value : stage.value;
       const retainedPercent = index === 0 ? 100 : (previous > 0 ? Math.min(100, Math.round((stage.value / previous) * 1000) / 10) : 0);
@@ -1740,8 +1799,11 @@ router.get('/traffic-insights/export', async (req, res) => {
           event_name, session_id, visitor_id, page_path, page_title,
           product_id, product_name, source, referrer_host, utm_term,
           campaign, ad_group, browser_name, device_type, os_name,
-          city_name, region_name, country_code, timezone_name,
+          city_name, region_name, province_name, municipality_name,
+          country_code, timezone_name,
           event_value, duration_seconds, client_occurred_at, occurred_at,
+          event_sequence, cart_items, cart_value, delivery_cost,
+          delivery_option, order_reference, failure_reason,
           COALESCE(client_occurred_at, occurred_at AT TIME ZONE 'UTC') AS event_time
         FROM storefront_analytics_events
         WHERE traffic_type = 'customer'
@@ -1792,9 +1854,9 @@ router.get('/traffic-insights/export', async (req, res) => {
         pageViews: eventCount('page_view'),
         productViews: eventCount('product_view'),
         addToCartActions: eventCount('add_to_cart'),
-        checkoutSessions: distinctSessionsWith(['begin_checkout', 'checkout_step']),
-        paymentSessions: distinctSessionsWith(['payment_started']),
-        purchases: distinctSessionsWith(['purchase']),
+        checkoutSessions: distinctSessionsWith(['checkout_clicked', 'checkout_loaded', 'begin_checkout', 'checkout_step']),
+        paymentSessions: distinctSessionsWith(['payment_clicked', 'payfast_redirected', 'payment_started']),
+        purchases: distinctSessionsWith(['payment_success', 'purchase_complete', 'purchase']),
       },
       botSummary: botResult.rows[0] || { visitors: 0, sessions: 0, events: 0 },
       similarBehavior: {

@@ -16,6 +16,7 @@ import {
   normalizeClientOccurredAt,
   normalizeEventSequence,
 } from '../services/analyticsEventTiming.js';
+import { requestAnalyticsLocation } from '../services/analyticsLocation.js';
 
 export const router = express.Router();
 
@@ -26,31 +27,32 @@ const ALLOWED_EVENTS = new Set([
   'form_submission', 'button_click', 'outbound_click', 'error',
   'scroll_depth', 'search', 'image_view', 'section_open',
   'survey_response',
+  'cart_opened', 'cart_item_removed', 'quantity_changed',
+  'checkout_clicked', 'checkout_loaded', 'delivery_location_entered',
+  'delivery_quote_shown', 'delivery_option_selected',
+  'customer_details_started', 'customer_details_completed',
+  'payment_clicked', 'payfast_redirected', 'payment_success',
+  'payment_failed', 'purchase_complete',
 ]);
 const cleanText = (value, maxLength = 160) => String(value || '').trim().slice(0, maxLength);
+const cleanMoney = (value) => {
+  const amount = Number(value);
+  return Number.isFinite(amount) && amount >= 0 && amount <= 10000000
+    ? Math.round(amount * 100) / 100
+    : null;
+};
+const cleanCartItems = (value) => (Array.isArray(value) ? value : []).slice(0, 100).map((item) => ({
+  productId: cleanText(item?.productId, 120) || null,
+  productName: cleanText(item?.productName, 240) || null,
+  productCategory: cleanText(item?.productCategory, 120) || null,
+  quantity: Math.max(1, Math.min(999, Number.parseInt(item?.quantity, 10) || 1)),
+  unitPrice: cleanMoney(item?.unitPrice),
+  lineTotal: cleanMoney(item?.lineTotal),
+}));
 const cleanPath = (value) => {
   const path = cleanText(value, 240);
   return path.startsWith('/') ? path.split('?')[0] : '/';
 };
-const requestCountryCode = (req) => {
-  const value = String(
-    req.get('cf-ipcountry')
-    || req.get('cloudfront-viewer-country')
-    || req.get('x-vercel-ip-country')
-    || ''
-  ).trim().toUpperCase();
-  return /^[A-Z]{2}$/.test(value) && !['XX', 'T1'].includes(value) ? value : null;
-};
-const requestLocation = (req) => ({
-  cityName: cleanText(
-    req.get('x-vercel-ip-city') || req.get('cf-ipcity') || req.get('cloudfront-viewer-city'),
-    120
-  ) || null,
-  regionName: cleanText(
-    req.get('x-vercel-ip-country-region') || req.get('cf-region') || req.get('cloudfront-viewer-country-region'),
-    120
-  ) || null,
-});
 const requestDevice = (req) => {
   const userAgent = String(req.get('user-agent') || '').slice(0, 500);
   const browserName = /Edg\//i.test(userAgent) ? 'Edge'
@@ -291,6 +293,8 @@ router.post('/events', optionalAuth, async (req, res) => {
     const campaign = cleanText(body.campaign, 180) || null;
     const referrerHost = cleanText(body.referrerHost, 180) || null;
     const pageLoadId = cleanText(body.pageLoadId, 96) || null;
+    const interactionId = cleanText(body.interactionId, 96) || null;
+    const cartItems = cleanCartItems(body.cartItems);
     const dedupeKey = createAnalyticsEventDedupeKey({
       sessionId,
       eventName,
@@ -298,9 +302,16 @@ router.post('/events', optionalAuth, async (req, res) => {
       productId: cleanText(body.productId, 120) || null,
       eventValue: Number.isFinite(eventValue) ? eventValue : null,
       pageLoadId,
+      interactionId,
     });
     const { browserName, deviceType, osName } = requestDevice(req);
-    const { cityName, regionName } = requestLocation(req);
+    const {
+      countryCode,
+      cityName,
+      regionName,
+      provinceName,
+      municipalityName,
+    } = requestAnalyticsLocation(req);
     await pool.query(
       `INSERT INTO storefront_analytics_events
        (event_name, session_id, visitor_id, page_path, page_title, product_id,
@@ -310,11 +321,15 @@ router.post('/events', optionalAuth, async (req, res) => {
         page_url, referrer, utm_source, utm_medium, utm_campaign, utm_term,
         utm_content, gclid, campaign_source, campaign_medium, campaign_name,
         page_load_id, event_dedupe_key, browser_name, device_type, os_name,
-        city_name, region_name, ad_group, client_occurred_at, event_sequence)
+        city_name, region_name, province_name, municipality_name,
+        ad_group, client_occurred_at, event_sequence,
+        cart_items, cart_value, delivery_cost, delivery_option, interaction_id,
+        order_reference, failure_reason)
        VALUES (
          $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,
          $18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29,$30,$31,$32,$33,
-         $34,$35,$36,$37,$38,$39,$40,$41,$42,$43
+         $34,$35,$36,$37,$38,$39,$40,$41,$42,$43,$44,$45,$46,$47,$48,$49,$50,
+         $51,$52
        )
        ON CONFLICT (event_dedupe_key)
        WHERE event_dedupe_key IS NOT NULL
@@ -332,7 +347,7 @@ router.post('/events', optionalAuth, async (req, res) => {
         medium,
         campaign,
         referrerHost,
-        requestCountryCode(req),
+        countryCode,
         cleanText(body.timezoneName, 80) || null,
         cleanText(body.browserLocale, 32) || null,
         Number.isFinite(eventValue) ? Math.max(0, Math.min(eventValue, 100)) : null,
@@ -360,9 +375,18 @@ router.post('/events', optionalAuth, async (req, res) => {
         osName,
         cityName,
         regionName,
+        provinceName,
+        municipalityName,
         cleanText(body.adGroup, 180) || cleanText(body.utmContent, 180) || null,
         normalizeClientOccurredAt(body.clientOccurredAt),
         normalizeEventSequence(body.eventSequence),
+        JSON.stringify(cartItems),
+        cleanMoney(body.cartValue),
+        cleanMoney(body.deliveryCost),
+        cleanText(body.deliveryOption, 160) || null,
+        interactionId,
+        cleanText(body.orderReference, 160) || null,
+        cleanText(body.failureReason, 160) || null,
       ]
     );
     return res.status(202).json({ ok: true });

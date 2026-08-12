@@ -67,3 +67,23 @@ test('rapid duplicate actions share a key but later actions do not', () => {
     createAnalyticsEventDedupeKey({ ...action, nowMs: 4000 })
   );
 });
+
+test('one checkout interaction is deduplicated even when retried later', () => {
+  const checkout = {
+    ...event,
+    eventName: 'checkout_clicked',
+    interactionId: 'checkout-click-1',
+  };
+  assert.equal(
+    createAnalyticsEventDedupeKey({ ...checkout, nowMs: 1000 }),
+    createAnalyticsEventDedupeKey({ ...checkout, nowMs: 9000 })
+  );
+});
+
+test('separate rapid quantity changes remain countable', () => {
+  const quantity = { ...event, eventName: 'quantity_changed' };
+  assert.notEqual(
+    createAnalyticsEventDedupeKey({ ...quantity, interactionId: 'plus-1', nowMs: 1000 }),
+    createAnalyticsEventDedupeKey({ ...quantity, interactionId: 'plus-2', nowMs: 1001 })
+  );
+});

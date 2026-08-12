@@ -116,6 +116,8 @@ async function initDb() {
   await pool.query(`ALTER TABLE orders ADD COLUMN IF NOT EXISTS sent_confirmation BOOLEAN DEFAULT FALSE;`);
   await pool.query(`ALTER TABLE orders ADD COLUMN IF NOT EXISTS owner_order_email_sent BOOLEAN DEFAULT FALSE;`);
   await pool.query(`ALTER TABLE orders ADD COLUMN IF NOT EXISTS owner_order_sms_sent BOOLEAN DEFAULT FALSE;`);
+  await pool.query(`ALTER TABLE orders ADD COLUMN IF NOT EXISTS analytics_visitor_id TEXT;`);
+  await pool.query(`ALTER TABLE orders ADD COLUMN IF NOT EXISTS analytics_session_id TEXT;`);
 
   // Customer-reported late delivery/pickup flags for admin follow-up.
   await pool.query(`ALTER TABLE orders ADD COLUMN IF NOT EXISTS late_order_flagged_at TIMESTAMP;`);
@@ -456,10 +458,19 @@ async function initDb() {
       os_name TEXT,
       city_name TEXT,
       region_name TEXT,
+      province_name TEXT,
+      municipality_name TEXT,
       ad_group TEXT,
       client_occurred_at TIMESTAMPTZ,
       event_sequence BIGINT,
       event_value INTEGER,
+      cart_items JSONB NOT NULL DEFAULT '[]'::jsonb,
+      cart_value NUMERIC(12,2),
+      delivery_cost NUMERIC(12,2),
+      delivery_option TEXT,
+      interaction_id TEXT,
+      order_reference TEXT,
+      failure_reason TEXT,
       duration_seconds INTEGER,
       occurred_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
     );
@@ -491,10 +502,26 @@ async function initDb() {
   await pool.query(`ALTER TABLE storefront_analytics_events ADD COLUMN IF NOT EXISTS os_name TEXT;`);
   await pool.query(`ALTER TABLE storefront_analytics_events ADD COLUMN IF NOT EXISTS city_name TEXT;`);
   await pool.query(`ALTER TABLE storefront_analytics_events ADD COLUMN IF NOT EXISTS region_name TEXT;`);
+  await pool.query(`ALTER TABLE storefront_analytics_events ADD COLUMN IF NOT EXISTS province_name TEXT;`);
+  await pool.query(`ALTER TABLE storefront_analytics_events ADD COLUMN IF NOT EXISTS municipality_name TEXT;`);
+  await pool.query(`
+    UPDATE storefront_analytics_events
+    SET province_name = COALESCE(province_name, region_name),
+        municipality_name = COALESCE(municipality_name, city_name)
+    WHERE (province_name IS NULL AND region_name IS NOT NULL)
+       OR (municipality_name IS NULL AND city_name IS NOT NULL);
+  `);
   await pool.query(`ALTER TABLE storefront_analytics_events ADD COLUMN IF NOT EXISTS ad_group TEXT;`);
   await pool.query(`ALTER TABLE storefront_analytics_events ADD COLUMN IF NOT EXISTS client_occurred_at TIMESTAMPTZ;`);
   await pool.query(`ALTER TABLE storefront_analytics_events ADD COLUMN IF NOT EXISTS event_sequence BIGINT;`);
   await pool.query(`ALTER TABLE storefront_analytics_events ADD COLUMN IF NOT EXISTS event_value INTEGER;`);
+  await pool.query(`ALTER TABLE storefront_analytics_events ADD COLUMN IF NOT EXISTS cart_items JSONB NOT NULL DEFAULT '[]'::jsonb;`);
+  await pool.query(`ALTER TABLE storefront_analytics_events ADD COLUMN IF NOT EXISTS cart_value NUMERIC(12,2);`);
+  await pool.query(`ALTER TABLE storefront_analytics_events ADD COLUMN IF NOT EXISTS delivery_cost NUMERIC(12,2);`);
+  await pool.query(`ALTER TABLE storefront_analytics_events ADD COLUMN IF NOT EXISTS delivery_option TEXT;`);
+  await pool.query(`ALTER TABLE storefront_analytics_events ADD COLUMN IF NOT EXISTS interaction_id TEXT;`);
+  await pool.query(`ALTER TABLE storefront_analytics_events ADD COLUMN IF NOT EXISTS order_reference TEXT;`);
+  await pool.query(`ALTER TABLE storefront_analytics_events ADD COLUMN IF NOT EXISTS failure_reason TEXT;`);
   await pool.query(`
     CREATE TABLE IF NOT EXISTS storefront_analytics_audiences (
       visitor_id TEXT PRIMARY KEY,

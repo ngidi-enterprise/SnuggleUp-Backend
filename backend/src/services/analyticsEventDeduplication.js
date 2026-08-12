@@ -12,6 +12,21 @@ const SHORT_WINDOW_EVENTS = new Set([
   'product_click',
   'search',
   'add_to_cart',
+  'cart_opened',
+  'cart_item_removed',
+  'quantity_changed',
+  'checkout_clicked',
+  'checkout_loaded',
+  'delivery_location_entered',
+  'delivery_quote_shown',
+  'delivery_option_selected',
+  'customer_details_started',
+  'customer_details_completed',
+  'payment_clicked',
+  'payfast_redirected',
+  'payment_success',
+  'payment_failed',
+  'purchase_complete',
   'remove_from_cart',
   'begin_checkout',
   'checkout_step',
@@ -30,6 +45,7 @@ export const createAnalyticsEventDedupeKey = ({
   productId,
   eventValue,
   pageLoadId,
+  interactionId,
   nowMs = Date.now(),
 } = {}) => {
   const base = [
@@ -39,6 +55,12 @@ export const createAnalyticsEventDedupeKey = ({
     safePart(productId),
     safePart(eventValue),
   ];
+
+  if (interactionId) {
+    // The browser creates one interaction ID for one click/change. Retries with
+    // that ID collapse, while two intentional rapid clicks remain countable.
+    return [...base, 'interaction', safePart(interactionId)].join('|');
+  }
 
   if (eventName === 'session_start') {
     return [...base, 'session'].join('|');
@@ -59,4 +81,3 @@ export const createAnalyticsEventDedupeKey = ({
 
   return null;
 };
-
